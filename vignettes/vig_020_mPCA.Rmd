@@ -1,0 +1,596 @@
+---
+title: "Morphological Principal Components Analysis"
+output:
+  html_document:
+    toc: yes
+    toc_depth: 4
+---
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Aim and Setup
+
+### Setup
+
+Load required packages:
+```{r setup, echo = TRUE, message = FALSE, warning = FALSE}
+#load required packages
+library(tidyverse) #data manipulation
+library(leiocephalus) #this package
+library(ggrepel) #labeling species in plots
+library(patchwork) #combining figures
+library(here) #easy pathing
+```
+
+Set some data partition switches
+```{r switches for PCA}
+
+#default: w/ SVL and trait correction
+#w/o SVL trait correction
+#w/ trait correction but no SVL
+#w/o trait correction and SVL
+
+#uses SVL to standardize all other traits
+svl.correct <- TRUE
+#use SVL in the PCA independent of svl.correct
+use.svl <- TRUE
+```
+
+
+Call the raw morphological data and IUCN data
+```{r raw data}
+data(morph_means, package = "leiocephalus")
+data(iucn, package = "leiocephalus")
+data(trait_key, package = "leiocephalus")
+```
+
+Remove the genus from the names for individual species for the morph dataset before merging them
+```{r quick tidying}
+#rename the species to drop the genus
+morph_means <- morph_means %>%
+  mutate(species = str_remove(species, pattern = "Leiocephalus "))
+```
+
+Now we should quickly check the relationship between maxsvl (trait 1.1) and svl (trait 1) in `morph_means`. 
+
+```{r check maxsvl vs mean svl}
+#check the correlation
+cor.test(x = morph_means$`1.1`, y = morph_means$`1`, method = "pearson")
+
+#plot to visualize
+ggplot(data = morph_means, aes(x = `1.1`, y = `1`)) +
+  geom_point() +
+  stat_smooth(method = "lm", se = FALSE) +
+  theme_bw() +
+  labs(x = "Max SVL", y = "Mean Measured SVL")
+```
+
+We are also going to isolate just the traits we are interested in for the PCA:
+
+  - 1     SVL
+  - 3     Fore-Hind Limb Distance
+  - 6     Pelvis Width
+  - 7     Pelvis Height
+  - 9.1   Total Tail Length
+  - 11    Head Length
+  - 12    Head Width
+  - 13    Head Height
+  - 17    Finger IV Metatarsal Length
+  - 20    Upperarm Length
+  - 21    Forearm Length
+  - 23    Toe IV Metatarsal Length
+  - 24    Toe IV Width
+  - 26    Thigh Length          
+  - 27    Shank Length
+  
+```{r isolate morph traits}
+#vector of traits to keep
+keep.morph <- c("1","3","6","7","9.1","11","12","13","17","20","21","23","24","26","27")
+
+#filter accordingly
+dat.morph <- morph_means %>%
+  dplyr::select(colnames(morph_means)[colnames(morph_means) %in% c("species", keep.morph)]) %>%
+  as_tibble(.)
+```
+  
+Now merge the datasets
+
+```{r merge morph and iucn, message=FALSE}
+#dat.morph <- right_join(iucn, dat.morph, by = c("species" = "species"))
+dat.morph <- right_join(iucn, dat.morph, by = c("species" = "species"))
+```
+
+Next, we log-transform our trait data ($log_{10}(trait+1)$) to normalize it and then divide by body size (`SVL`) to correct for body size allometry.
+
+```{r transform and correct for allometry}
+if(svl.correct == TRUE && use.svl == TRUE){   #default uses both
+#log transform all
+ln.dat.morph <- log10(dat.morph[,-1:-7]+1)
+
+#divide all trait values other than SVL by SVL and bind back to log10(SVL+1)
+ln.dat.morph <- cbind((ln.dat.morph[1]), (ln.dat.morph[,-1] / ln.dat.morph[,1]))
+
+} else if(svl.correct == TRUE && use.svl == FALSE){ #corrects but does not use svl to plot
+#log transform all
+ln.dat.morph <- log10(dat.morph[,-1:-7]+1)
+
+#divide all trait values other than SVL by SVL
+ln.dat.morph <- ln.dat.morph[,-1] / ln.dat.morph[,1]
+
+} else if(svl.correct == FALSE && use.svl == TRUE){ #does not correct but does uses svl to plot
+  #log transform all
+ln.dat.morph <- log10(dat.morph[,-1:-7]+1)
+
+} else if(svl.correct == FALSE && use.svl == FALSE){  #does neither
+#log transform all
+  ln.dat.morph <- log10(dat.morph[,-1:-7]+1)
+
+  #drop SVL
+  ln.dat.morph <- ln.dat.morph[,-1]
+
+}
+
+#re-attach the species names
+ln.dat.morph <- dat.morph %>%
+  dplyr::select(species:range) %>%
+  bind_cols(., ln.dat.morph)
+
+
+knitr::kable(ln.dat.morph)
+```
+
+## Analyses & Visualization
+
+### Analyses
+
+Now we can actually conduct the PCA itself. Of note, we use `stats::prcomp(center = TRUE, scale. = TRUE)` to center and scale the data before we make it a nice `tibble`. We still hold onto the actual PCA object but do not add any of the identifying data.
+
+```{r PCA time}
+#select just the trait data and conduct PCA
+dat.pca <- ln.dat.morph %>%
+  dplyr::select(-species:-range) %>%
+  prcomp(center = TRUE, scale. = TRUE)
+
+#make tibble version of the PCs
+dat_pca_tidy <- dplyr::bind_cols(dplyr::select(ln.dat.morph, species:range), as.data.frame(dat.pca$x))
+```
+
+Now we can extract some summary data from the PCA to hold onto for later. We can also add the trait key to the loadings.
+```{r pca summary}
+#store the variances
+pca.var <- summary(dat.pca)
+
+#add loadings and key
+pca.loadings <- dat.pca$rotation %>%
+  as_tibble() %>%
+  cbind(trait = rownames(dat.pca$rotation), .) %>%
+  left_join(., trait_key, by = c("trait" = "code")) %>%
+  dplyr::select(trait, meaning, everything())
+```
+
+### Visualization
+
+Now we can visualize the PCA!
+
+First, let's do that classic screeplot
+
+```{r screeplot}
+#make df of the var data
+  data.frame(PC = 1:length(pca.var$center),
+             var_exp = pca.var$importance[2,]
+               ) %>%
+  ggplot(aes(x = PC, y = var_exp, group = 1)) +
+    geom_point() +
+    geom_line() +
+    scale_x_continuous(breaks = seq(1, 15, 1)) +
+    labs(y = "Proportion of Variance Explained") +
+    theme_bw()
+```
+
+#### Species PCA Only
+
+```{r viz pca, warning=FALSE}
+p_m <- ggplot(data = dat_pca_tidy, mapping = aes(x = PC1, y = PC2)) +
+  geom_point(aes(shape = redlist2, size = log10(range)), show.legend = T, stroke = 1.25) +
+  geom_text_repel(aes(label=species, color = redlist2), min.segment.length = 0.75, box.padding = 1, max.overlaps = Inf) +
+  xlim(c(min(dat_pca_tidy$PC1*1.25),max(dat_pca_tidy$PC1*1.25))) +
+  ylim(c(min(dat_pca_tidy$PC2*1.25),max(dat_pca_tidy$PC2*1.25))) +
+  scale_shape_manual(values =c(2, 0, 18)) +
+  #scale_size_manual(values = c(1.5,1.5,2.5)) +
+  scale_size_continuous(range = c(1,5)) +
+  labs(
+       x = paste0("PC 1 - ", round((pca.var$importance[2,1]*100), 2), " %"),
+       y = paste0("PC 2 - ", round((pca.var$importance[2,2]*100), 2), " %")
+       ) +
+  guides(cex = F, stroke = F, size = F, shape = F) +
+  theme_bw() +
+  theme(panel.grid.minor = element_blank(),
+        panel.grid.major = element_blank()
+        )
+
+p_m
+```
+
+Now that we have the PCA, we need to add some polygons to help visualize lost area.
+
+#### Species with extinction hulls PCA
+
+We first build the extinction hulls that describe each group of lost species:
+
+  - `past_hull`: no species removed
+  - `present_hull`: EX species removed
+  - `future_hull`: EX and TH species removed
+
+```{r get hulls}
+#get the polygons for the time slices
+##PAST
+past_hull <- dat_pca_tidy %>%
+  mutate(island_bank = str_replace(string = island_bank, pattern = "Bahamas and Cuba", replacement = "Cuba")) %>%
+  .[chull(.$PC1, .$PC2),]
+levels(past_hull$island_bank) <- levels(dat_pca_tidy$island_bank)
+
+##PRESENT
+#RM THE EX SPP
+present_hull <- dat_pca_tidy %>%
+  mutate(island_bank = str_replace(string = island_bank, pattern = "Bahamas and Cuba", replacement = "Cuba")) %>%
+  filter(redlist2 != "EX") %>%
+  .[chull(.$PC1, .$PC2),]
+levels(present_hull$island_bank) <- levels(dat_pca_tidy$island_bank)
+
+##FUTURE
+#RM THE EX AND TH SPP
+future_hull <- dat_pca_tidy %>%
+  mutate(island_bank = str_replace(string = island_bank, pattern = "Bahamas and Cuba", replacement = "Cuba")) %>%
+  filter(redlist2 != "EX" & redlist2 != "TH") %>%
+  .[chull(.$PC1, .$PC2),]
+levels(future_hull$island_bank) <- levels(dat_pca_tidy$island_bank)
+
+#quickly calculate the lost area
+((sp::Polygon(present_hull %>% dplyr::select(PC1,PC2))@area) - (sp::Polygon(future_hull %>% dplyr::select(PC1,PC2))@area)) / (sp::Polygon(present_hull %>% dplyr::select(PC1,PC2))@area)
+
+
+```
+
+We then can replot the PCA with the different hulls as species are lost:
+
+```{r replot PCA with hulls, message=FALSE, warning=FALSE}
+p_m12 <- ggplot(data = dat_pca_tidy %>% filter(redlist2 != "EX"), mapping = aes(x = PC1, y = PC2)) +
+    geom_polygon(data = future_hull, aes(x = PC1, y = PC2), color = "grey", fill = rgb(190/255,190/255,190/255,150/255), show.legend = F, alpha = 0.5) +
+  geom_polygon(data = present_hull, aes(x = PC1, y = PC2), color = "grey", fill = rgb(190/255,190/255,190/255,100/255), show.legend = F, alpha = 0.3, lty = 3) +
+  #geom_polygon(data = past_hull, aes(x = PC1, y = PC2), color = "grey", fill = rgb(190/255,190/255,190/255,50/255), show.legend = F, alpha = 0.1, lty = 2) +
+  geom_point(aes(shape = redlist2, size = (range), color = notes), show.legend = T, stroke = 1.25) +
+  xlim(c(min(dat_pca_tidy$PC1*1.25),max(dat_pca_tidy$PC1*1.25))) +
+  ylim(c(min(dat_pca_tidy$PC2*1.25),max(dat_pca_tidy$PC2*1.25))) +
+  #scale_shape_manual(values =c(2, 0, 18)) +
+  scale_shape_manual(values =c(0, 18)) +
+  #scale_size_manual(values = c(1.5,1.5,2.5)) +
+  scale_size_continuous(range = c(1,5)) +
+  #scale_color_manual(name = "Exotic Status",values = c("black", "black", "red")) +
+  scale_color_manual(name = "Exotic Status",values = c("red", "black")) +
+  labs(
+       #x = paste0("PC 1 - ", round((pca.var$importance[2,1]*100), 2), " %", "\n large body; large digits; large head; wide pelvis"),
+       #y = paste0("PC 2 - ", round((pca.var$importance[2,2]*100), 2), " %", "\nshort tail and limbs; wide and short torso")
+       x = paste0("PC 1 - ", round((pca.var$importance[2,1]*100), 2), " %"),
+       y = paste0("PC 2 - ", round((pca.var$importance[2,2]*100), 2), " %")
+       ) +
+  guides(cex = F, stroke = F, size = F, shape = F, color = F) +
+  guides(shape=guide_legend(title="Threat Status"), size = F) +
+  theme_bw() +
+  theme(legend.justification = c(0, 1), 
+        legend.position = c(0, 1), 
+        legend.background = element_rect(fill = "transparent", colour = "transparent"), 
+        legend.key = element_rect(fill = "transparent", colour = "transparent"), 
+        panel.grid.minor = element_blank(),
+        panel.grid.major = element_blank()
+        )
+
+p_m12
+```
+
+```{r time slicing}
+#TIME SLICE VERSION
+ 
+#we need to recode the dat_pca_tidy data to be past/present/future
+dat_pca_tidy_time <- dat_pca_tidy %>%
+  mutate(redlist3 = "PAST") 
+ 
+dat_pca_tidy_time <- bind_rows(dat_pca_tidy_time, #past version
+            dat_pca_tidy_time %>% filter(redlist2 != "EX") %>% mutate(redlist3 = "PRESENT"), #present version, we will drop the EX species and then recode the redlist3 for this
+            dat_pca_tidy_time %>% filter(redlist2 != "EX" & redlist2 != "TH") %>% mutate(redlist3 = "FUTURE")
+            ) %>%
+  mutate(redlist3 = factor(redlist3, levels = c("PAST", "PRESENT", "FUTURE")))
+
+
+p_f_time <- dat_pca_tidy_time %>%
+ggplot(data = ., mapping = aes(x = PC1, y = PC2)) +
+  geom_point(aes(size = (range), color = notes), show.legend = T, stroke = 1.25, shape = 16) +
+  xlim(c(min(dat_pca_tidy$PC1*1.75),max(dat_pca_tidy$PC1*1.75))) +
+  ylim(c(min(dat_pca_tidy$PC2*1.75),max(dat_pca_tidy$PC2*1.75))) +
+  #scale_shape_manual(values =c(2, 0, 18)) +
+  #scale_size_manual(values = c(1.5,1.5,2.5)) +
+  scale_size_continuous(range = c(1,5)) +
+  scale_color_manual(name = "Exotic Status",values = c("black", "black", "red")) +
+  labs(
+       x = paste0("PC 1 - ", round((pca.var$importance[2,1]*100), 2), " %"),
+       y = paste0("PC 2 - ", round((pca.var$importance[2,2]*100), 2), " %")
+       ) +
+  guides(cex = F, stroke = F, size = F, shape = F, color = F) +
+  #guides(shape=guide_legend(title="Threat Status"), size = F) +
+  facet_wrap(~redlist3) +
+  theme_bw() +
+  theme(legend.justification = c(0, 1), 
+        legend.position = c(0, 1), 
+        legend.background = element_rect(fill = "transparent", colour = "transparent"), 
+        legend.key = element_rect(fill = "transparent", colour = "transparent"), 
+        panel.grid.minor = element_blank(),
+        panel.grid.major = element_blank()
+        )
+```
+
+```{r time slicing with hulls}
+#get the hulls
+#get the polygons for the time slices
+##PAST
+past_hull <- dat_pca_tidy_time %>%
+  filter(redlist3 == "PAST") %>%
+  mutate(island_bank = str_replace(string = island_bank, pattern = "Bahamas and Cuba", replacement = "Cuba")) %>%
+  .[chull(.$PC1, .$PC2),]
+levels(past_hull$island_bank) <- levels(dat_pca_tidy$island_bank)
+
+##PRESENT
+#RM THE EX SPP
+present_hull <- dat_pca_tidy_time %>%
+  filter(redlist3 == "PRESENT") %>%
+  mutate(island_bank = str_replace(string = island_bank, pattern = "Bahamas and Cuba", replacement = "Cuba")) %>%
+  .[chull(.$PC1, .$PC2),]
+levels(present_hull$island_bank) <- levels(dat_pca_tidy$island_bank)
+
+##FUTURE
+#RM THE EX AND TH SPP
+future_hull <- dat_pca_tidy_time %>%
+  filter(redlist3 == "FUTURE") %>%
+  mutate(island_bank = str_replace(string = island_bank, pattern = "Bahamas and Cuba", replacement = "Cuba")) %>%
+  .[chull(.$PC1, .$PC2),]
+levels(future_hull$island_bank) <- levels(dat_pca_tidy$island_bank)
+
+#combine the hulls
+all_hulls <- bind_rows(
+  past_hull,
+  present_hull,
+  future_hull
+)
+
+#facetted time plot
+p1 <- p_f_time +
+  geom_polygon(data = all_hulls, aes(x = PC1, y = PC2), color = "grey", fill = rgb(190/255,190/255,190/255,150/255), show.legend = F, alpha = 0.5) +
+    geom_point(aes(size = (range), color = notes), show.legend = T, stroke = 1.25, shape = 16)
+
+p1
+
+
+#now make a version that is just past and future
+p_f_pf <- dat_pca_tidy_time %>%
+  filter(redlist3 != "PRESENT") %>%
+ggplot(data = ., mapping = aes(x = PC1, y = PC2)) +
+  geom_point(aes(size = (range), color = notes), show.legend = T, stroke = 1.25, shape = 16) +
+  xlim(c(min(dat_pca_tidy$PC1*1.75),max(dat_pca_tidy$PC1*1.75))) +
+  ylim(c(min(dat_pca_tidy$PC2*1.75),max(dat_pca_tidy$PC2*1.75))) +
+  #scale_shape_manual(values =c(2, 0, 18)) +
+  #scale_size_manual(values = c(1.5,1.5,2.5)) +
+  scale_size_continuous(range = c(1,5)) +
+  scale_color_manual(name = "Exotic Status",values = c("black", "black", "red")) +
+  labs(
+       x = paste0("PC 1 - ", round((pca.var$importance[2,1]*100), 2), " %"),
+       y = paste0("PC 2 - ", round((pca.var$importance[2,2]*100), 2), " %")
+       ) +
+  guides(cex = F, stroke = F, size = F, shape = F, color = F) +
+  #guides(shape=guide_legend(title="Threat Status"), size = F) +
+  facet_wrap(~redlist3) +
+  theme_bw() +
+  theme(legend.justification = c(0, 1), 
+        legend.position = c(0, 1), 
+        legend.background = element_rect(fill = "transparent", colour = "transparent"), 
+        legend.key = element_rect(fill = "transparent", colour = "transparent"), 
+        panel.grid.minor = element_blank(),
+        panel.grid.major = element_blank()
+        )
+
+p_f_pf +
+  geom_polygon(data = all_hulls %>% filter(redlist3 != "PRESENT"), aes(x = PC1, y = PC2), color = "grey", fill = rgb(190/255,190/255,190/255,150/255), show.legend = F, alpha = 0.5) +
+    geom_point(aes(size = (range), color = notes), show.legend = T, stroke = 1.25, shape = 16)
+
+```
+
+
+#### Species with extinction hulls PCA (PC1 x PC2 and PC1 x PC3)
+
+We now need to recreate hulls for PC1 and PC3 together. This code is identical to that above, except it swaps PC2 for PC3.
+
+```{r pc1 and pc3 hulls}
+#get the polygons for the time slices
+##PAST
+past_hull13 <- dat_pca_tidy %>%
+  mutate(island_bank = str_replace(string = island_bank, pattern = "Bahamas and Cuba", replacement = "Cuba")) %>%
+  .[chull(.$PC1, .$PC3),]
+levels(past_hull13$island_bank) <- levels(dat_pca_tidy$island_bank)
+
+##PRESENT
+#RM THE EX SPP
+present_hull13 <- dat_pca_tidy %>%
+  mutate(island_bank = str_replace(string = island_bank, pattern = "Bahamas and Cuba", replacement = "Cuba")) %>%
+  filter(redlist2 != "EX") %>%
+  .[chull(.$PC1, .$PC3),]
+levels(present_hull13$island_bank) <- levels(dat_pca_tidy$island_bank)
+
+##FUTURE
+#RM THE EX AND TH SPP
+future_hull13 <- dat_pca_tidy %>%
+  mutate(island_bank = str_replace(string = island_bank, pattern = "Bahamas and Cuba", replacement = "Cuba")) %>%
+  filter(redlist2 != "EX" & redlist2 != "TH") %>%
+  .[chull(.$PC1, .$PC3),]
+levels(future_hull13$island_bank) <- levels(dat_pca_tidy$island_bank)
+```
+Now to create a plot for the other PCs
+
+```{r pca13, message=FALSE, warning=FALSE}
+p_m13 <- ggplot(data = dat_pca_tidy, mapping = aes(x = PC1, y = PC3)) +
+    geom_polygon(data = future_hull13, aes(x = PC1, y = PC3), color = "grey", fill = rgb(190/255,190/255,190/255,150/255), show.legend = F, alpha = 0.5) +
+  geom_polygon(data = present_hull13, aes(x = PC1, y = PC3), color = "grey", fill = rgb(190/255,190/255,190/255,100/255), show.legend = F, alpha = 0.3, lty = 3) +
+  geom_polygon(data = past_hull13, aes(x = PC1, y = PC3), color = "grey", fill = rgb(190/255,190/255,190/255,50/255), show.legend = F, alpha = 0.1, lty = 2) +
+  geom_point(aes(shape = redlist2, size = (range), color = notes), show.legend = T, stroke = 1.25) +
+  xlim(c(min(dat_pca_tidy$PC1*1.25),max(dat_pca_tidy$PC1*1.25))) +
+  ylim(c(min(dat_pca_tidy$PC3*1.25),max(dat_pca_tidy$PC3*1.25))) +
+  scale_shape_manual(values =c(2, 0, 18)) +
+  scale_color_manual(name = "Exotic Status",values = c("black", "black", "red")) +
+  #scale_size_manual(values = c(1.5,1.5,2.5)) +
+  scale_size_continuous(range = c(1,5)) +
+  labs(
+       x = paste0("PC 1 - ", round((pca.var$importance[2,1]*100), 2), " %"),
+       y = paste0("PC 3 - ", round((pca.var$importance[2,3]*100), 2), " %")
+       ) +
+  guides(cex = F, stroke = F, size = F, shape = F, color = F) +
+  theme_bw() +
+  theme(legend.justification = c(0, 1), 
+        legend.position = c(0, 1), 
+        legend.background = element_rect(fill = "transparent", colour = "transparent"), 
+        legend.key = element_rect(fill = "transparent", colour = "transparent"), 
+        panel.grid.minor = element_blank(),
+        panel.grid.major = element_blank()
+        )
+```
+
+
+We can plot the two PCAs together.
+
+```{r multiPCA}
+p_m12 / p_m13
+```
+
+Now we can load and try to make the composite figure.
+
+```{r load objects for composite plot, fig.height=5.5, fig.width=7.5}
+#load other plots objects
+data("extinction_pc1_best")
+data("extinction_pc2_best")
+
+#present PCA
+pca_present <- dat_pca_tidy_time %>%
+    filter(redlist3 != "PAST") %>%
+    ggplot(data = ., mapping = aes(x = PC1, y = PC2)) +
+    geom_polygon(data = present_hull, aes(x = PC1, y = PC2), color = "grey", fill = rgb(190/255,190/255,190/255,100/255), show.legend = F, alpha = 0.3, lty = 3) +
+    geom_point(aes(size = (range), color = notes), show.legend = T, stroke = 1.25, shape = 16) +
+    xlim(c(min(dat_pca_tidy$PC1*1.5),max(dat_pca_tidy$PC1*1.5))) +
+    ylim(c(min(dat_pca_tidy$PC2*1.5),max(dat_pca_tidy$PC2*1.5))) +
+    #scale_shape_manual(values =c(2, 0, 18)) +
+    #scale_size_manual(values = c(1.5,1.5,2.5)) +
+    scale_size_continuous(range = c(1,5)) +
+    #scale_color_manual(name = "Exotic Status",values = c("black", "black", "red")) +
+    scale_color_manual(name = "Exotic Status",values = c("red", "black")) +
+    labs(
+        x = paste0("PC 1 - ", round((pca.var$importance[2,1]*100), 2), " %"),
+        y = paste0("PC 2 - ", round((pca.var$importance[2,2]*100), 2), " %")
+    ) +
+    guides(cex = F, stroke = F, size = F, shape = F, color = F) +
+    #guides(shape=guide_legend(title="Threat Status"), size = F) +
+    #facet_wrap(~redlist3) +
+    theme_bw() +
+    ggtitle(label = "A") +
+    theme(legend.justification = c(0, 1), 
+          legend.position = c(0, 1), 
+          legend.background = element_rect(fill = "transparent", colour = "transparent"), 
+          legend.key = element_rect(fill = "transparent", colour = "transparent"), 
+          panel.grid.minor = element_blank(),
+          panel.grid.major = element_blank()
+    ) 
+
+#future PCA
+pca_future <- dat_pca_tidy_time %>%
+    filter(redlist3 == "FUTURE") %>%
+    ggplot(data = ., mapping = aes(x = PC1, y = PC2)) +
+    geom_polygon(data = future_hull, aes(x = PC1, y = PC2), color = "grey", fill = rgb(190/255,190/255,190/255,150/255), show.legend = F, alpha = 0.5) +
+    geom_point(aes(size = (range), color = notes), show.legend = T, stroke = 1.25, shape = 16) +
+    xlim(c(min(dat_pca_tidy$PC1*1.5),max(dat_pca_tidy$PC1*1.5))) +
+    ylim(c(min(dat_pca_tidy$PC2*1.5),max(dat_pca_tidy$PC2*1.5))) +
+    #scale_shape_manual(values =c(2, 0, 18)) +
+    #scale_size_manual(values = c(1.5,1.5,2.5)) +
+    scale_size_continuous(range = c(1,5)) +
+    #scale_color_manual(name = "Exotic Status",values = c("black", "black", "red")) +
+    scale_color_manual(name = "Exotic Status",values = c("red", "black")) +
+    labs(
+        x = paste0("PC 1 - ", round((pca.var$importance[2,1]*100), 2), " %"),
+        y = paste0("PC 2 - ", round((pca.var$importance[2,2]*100), 2), " %")
+    ) +
+    guides(cex = F, stroke = F, size = F, shape = F, color = F) +
+    #guides(shape=guide_legend(title="Threat Status"), size = F) +
+    #facet_wrap(~redlist3) +
+    theme_bw() +
+    ggtitle(label = "B") +
+    theme(legend.justification = c(0, 1), 
+          legend.position = c(0, 1), 
+          legend.background = element_rect(fill = "transparent", colour = "transparent"), 
+          legend.key = element_rect(fill = "transparent", colour = "transparent"), 
+          panel.grid.minor = element_blank(),
+          panel.grid.major = element_blank()
+    ) 
+
+pca_present + (pca_future + 
+  inset_element(p = extinction_pc1_best,
+                 left = 0.55,
+                   bottom = 0.00, 
+                   right = 1.005, 
+                   top = 0.35
+                ) +
+  inset_element(p = extinction_pc2_best,
+                   left = 0.00,
+                   bottom = 0.75, 
+                   right = 0.4550, 
+                   top = 1.025
+                )
+)
+
+ggsave(pca_present + (pca_future + inset_element(p = extinction_pc1_best,
+                 left = 0.55,
+                   bottom = 0.00, 
+                   right = 1.005, 
+                   top = 0.35
+                ) +
+  inset_element(p = extinction_pc2_best,
+                   left = 0.00,
+                   bottom = 0.75, 
+                   right = 0.4550, 
+                   top = 1.025
+                )), filename = file.path(here(), "figures", "mPCA_extinct_inset.png"),width = 10, height = 8, units = "in", dpi = 300
+                #)), filename = file.path(here(), "figures", "mPCA_extinct_inset.png"),width = 1300*(300/72), height = 800*(300/72), units = "px"
+  )
+
+#alt equal size panels
+#((pca_present + ggtitle("Present")) + (pca_future + ggtitle("Future"))) / ((extinction_pc1_best + ggtitle("PC1 Loss")) + (extinction_pc2_best + ggtitle("PC2 Loss")))
+
+```
+
+## Saving outputs
+
+```{r save pca loadings, eval=FALSE}
+#need to se the way the data are saved here based on the switches added
+if(svl.correct == TRUE && use.svl == TRUE){
+  #default uses both
+save(dat_pca_tidy, file = file.path(here::here(), "data", "dat_pca_tidy.rda"))
+} else if(svl.correct == TRUE && use.svl == FALSE){
+  #rename for saving
+  dat_pca_tidy_nosvl <- dat_pca_tidy
+  #corrects but does not use svl to plot
+save(dat_pca_tidy_nosvl, file = file.path(here::here(), "data", "dat_pca_tidy_nosvl.rda"))
+} else if(svl.correct == FALSE && use.svl == TRUE){
+    #rename for saving
+  dat_pca_tidy_norescale <- dat_pca_tidy
+  #does not correct but does uses svl to plot
+save(dat_pca_tidy_norescale, file = file.path(here::here(), "data", "dat_pca_tidy_norescale.rda"))
+} else if(svl.correct == FALSE && use.svl == FALSE){
+      #rename for saving
+  dat_pca_tidy_nosvl_norescale <- dat_pca_tidy
+  #does neither
+save(dat_pca_tidy_nosvl_norescale, file = file.path(here::here(), "data", "dat_pca_tidy_nosvl_norescale.rda"))
+}
+```

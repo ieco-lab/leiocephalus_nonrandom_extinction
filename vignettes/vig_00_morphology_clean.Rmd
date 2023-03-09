@@ -1,0 +1,188 @@
+---
+title: "_Leiocephalus_ Morphology Data Cleaning and Tidying"
+output:
+  html_document:
+    toc: yes
+    toc_depth: 4
+---
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Aim and Setup
+### Aim
+  This vignette walks through the initial data cleaning and tidying that prepares the morphology data for _Leiocephalus_. As such, one should be able to start with initial raw data for individual measurements of specimens and end with a few cleaned data files that are necessary for future analyses in other vignettes.
+
+### Setup
+Load required packages:
+```{r setup, echo = FALSE, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(ieco)
+```
+
+Read in the raw data in `.rda` form:
+```{r raw data}
+data(morph, package = "leiocephalus")
+```
+
+## Analyses & Visualization
+
+Some individuals have been identified as erroroneous specimens for measurement (e.g., juveniles, questionable species ID, etc.). They are removed below based on their IDs. *-999* is also used to denote missing data for measurements, and so measurements with this value are removed as well.
+```{r remove error obs, message=FALSE, warning=FALSE}
+#create vector of IDs
+ind.rm <- c(267611, 8579, 192411, 242825, 242829, 79174, 242830)
+
+#KU 245099 is a subadult according to Schwartz, who distinguishes this type specimen from the juveniles
+
+#filter out the ind.rm IDs, then the -999's
+morph <- morph %>%
+  dplyr::filter(!(specimen.id.number %in% ind.rm)) %>%
+  dplyr::filter(value != -999)
+```
+
+Now, the specimens need to have a new, merged tail data trait! We use the function `ieco::tail_apply` to add the values of tail length to break (9) to regen tail length (10) where possible to create the new trait, total tail length (9.1). 
+
+1. Original tails will have all data in (9) and will remain unchanged in (9.1).
+2. Regenerated tails will have a new values that comprises the sum of the data in the two traits (9 and 10) in (9.1).
+3. Broken but unregenerated tails will have all data in (9) and will remain unchanged in (9.1).
+
+We then take the data for each specimen for (9.1) and add it to the end of `morph` with a simple row bind (`rbind()`).
+```{r tail length cleaning}
+#get the IDs for specimens
+ids <- unique(morph$specimen.id.number)
+
+#calc total tail lengths
+  #this adds the tail length to break (9) with the regen tail length (10) where available
+morph_tt <- (ieco::tail_apply(ids,morph)) #note new number 9.1
+
+#add the new measurements as rows at the end (will be sorted later)
+morph <- rbind(morph,morph_tt)
+```
+
+Next, we have to remove all tail lengths that are broken and not regrown, as these are not (or even close to) honest measures of tail length and will bias the dataset considerably. We also remove individuals with species designations that are uncertain (anything with a ?). We also merge the subspecies listings to the appropriate species( _Leiocephalus lunatus_ for _L. l. lewisi_ and _L. l. melaenacelis_ and _Leiocephalus psammodromus_ for _L. p. hyphantus_).
+```{r broken tail and uncertain species cleaning, message=FALSE, warning=FALSE}
+#tidyr identification of tail condition == 3 specimen IDs
+bad.tl <- morph %>%
+  filter(trait.number ==8 & value == 3) %>%
+  distinct(specimen.id.number) %>%
+  unlist(.)
+
+#filter out the specimen IDs above
+morph.tt <- morph[(!(morph$specimen.id.number %in% bad.tl)),]
+
+#remove spp w/ questionable taxonomy (those with "?" in species)
+morph.tt <- morph.tt[(-grep(morph.tt$species, pattern = "\\?")),]
+
+#merge the subspecies
+morph.tt$species <- gsub("Leiocephalus lunatus lewisi", "Leiocephalus lunatus", morph.tt$species)
+morph.tt$species <- gsub("Leiocephalus lunatus melaenacelis", "Leiocephalus lunatus", morph.tt$species)
+morph.tt$species <- gsub("Leiocephalus psammodromus hyphantus", "Leiocephalus psammodromus", morph.tt$species)
+```
+
+
+For many different specimens, we have multiple measurements. To appropriately summarize them while acknowledging that the earlier measurements may be more likely affected by measurement error, we identify the last two measurements (where possible) and average them into a single specimen trait value for all measured traits. To do this most effectively, this is completed by first locating the most complete (most measurements) observations for a specimen and then selecting the last two observations.
+```{r pick best measurements per speciment, message=FALSE, warning=FALSE}
+#ID the counts that are most complete (most measurements) and then select the last two measurements
+#then store the specimen[dot]count name in object retain to filter the dataset!
+
+#grab the data for counts without observations that need filtering
+small_counts <- morph.tt %>%
+  group_by(count, specimen.id.number, date.measured, measurer.name) %>%
+  summarise(n_measurements = n()) %>%
+  arrange(desc(n_measurements)) %>%
+  ungroup(.) %>%
+  group_by(specimen.id.number) %>%
+  arrange(specimen.id.number) %>%
+  summarise(n_counts = n()) %>%
+  filter(n_counts < 3) %>%
+  arrange(n_counts) %>%
+  dplyr::select(specimen.id.number) %>%
+  left_join(morph.tt)
+
+#obtain specimen IDs with multiple measurements
+trim_ids <- morph.tt %>%
+  group_by(count, specimen.id.number, date.measured, measurer.name, species) %>%
+  summarise(n_measurements = n()) %>%
+  arrange(desc(n_measurements)) %>%
+  ungroup(.) %>%
+  group_by(specimen.id.number, species) %>%
+  arrange(specimen.id.number) %>%
+  summarise(n_counts = n()) %>%
+  filter(n_counts > 2) %>%
+  arrange(n_counts) %>%
+  dplyr::select(specimen.id.number)
+
+#now create a table of the summarized number of traits and count ID for each specimen
+trim_counts <- morph.tt %>%
+  filter(specimen.id.number %in% trim_ids$specimen.id.number) %>%
+  group_by(specimen.id.number, count, species) %>%
+  summarise(n_traits = n()) %>%
+  ungroup() %>%
+  group_by(specimen.id.number)
+
+#initialize a counts object that will include the data to throwaway
+trash_counts <- morph.tt %>%
+  filter(specimen.id.number %in% trim_counts$specimen.id.number)
+
+#loop to create an object of rows to drop
+#criteria: takes the last two counts that have at least 20 characters measured
+for(a in unique(trim_counts$specimen.id.number)){
+  #get the counts to hold onto
+  counts_holder <- trim_counts %>%
+    filter(specimen.id.number %in% a) %>%
+    arrange(count) %>%
+    filter(n_traits > 20) %>%
+    tail(.$count, n = 2) %>%
+    dplyr::select(specimen.id.number, count) 
+  
+  #filter out the  counts to hold from the trash counter
+  trash_counts <- trash_counts %>%
+    filter(!(.$count %in% counts_holder$count))
+}
+
+#drop whatever is left in the trash_counts from morph.tt
+final.morph.tt <- morph.tt %>%
+  filter(!(.$count %in% trash_counts$count)) 
+
+#get new list of specimen IDs
+ids.tt <- unique(final.morph.tt$specimen.id.number)
+
+#show counts and specimen id's per species
+knitr::kable(
+final.morph.tt %>%
+  group_by(species, specimen.id.number) %>%
+  summarise(n()) %>%
+  ungroup() %>%
+  group_by(species) %>%
+  summarise(specimens_measured = n()),
+caption = "Number of Specimens Measured By Species"
+)
+```
+
+We have the option now to calculate species means for each trait now by using the function `ieco::spp.mean()`, which calculates the means for each specimen across measurements by first running `ieco::specimen.mean()` within itself.
+```{r calculate species means, message=FALSE, warning=FALSE}
+#run spp.mean and save as a final object
+morph.tt.means <- as_tibble(ieco::spp.mean(as.data.frame(final.morph.tt),ids.tt))
+```
+
+We will include the maximum recorded svl as a new trait (1.1) in the dataset. To do so, we need to read in the maxsvl data. Then, we will add maxsvl as a trait column in our final data object.
+```{r add maxsvl, message=FALSE, warning=FALSE}
+#read in maxsvl
+data(maxsvl, package = "leiocephalus")
+
+#try to bind them
+morph.tt.means.final <- left_join(morph.tt.means, maxsvl, by = "species") %>%
+  dplyr::select(species:`1`, maxSVL, `2`:`37`) %>%
+  rename(`1.1` = maxSVL)
+```
+
+## Saving outputs/exporting figures
+
+We have successfully cleaned the species morphology data to form a species means and will just need to save the results to `/data/`.
+```{r save the final data, eval=FALSE}
+#rename the object to make it easier to call in future code
+morph_means <- morph.tt.means.final
+
+save(morph_means, file = file.path(here::here(), "data", "morph_means.rda"))
+```

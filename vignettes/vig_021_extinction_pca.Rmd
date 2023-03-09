@@ -1,0 +1,1424 @@
+---
+title: '_Leiocephalus_ Morphology Extinction: Present to Future'
+output:
+  html_document:
+    toc: yes
+    toc_depth: 4
+    self_contained: no
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(collapse = TRUE,
+                      comment = "#>"
+  )
+```
+
+## Aim and Setup
+
+### Aim
+
+The purpose of this vignette is to demonstrate our analyses of the extinction through time for _Leiocephalus_ and associated simulations of expected patterns of extinction for our proposed non-random extinction (NRE). We previously set ordinal extinction for all species. This analysis covers **morphology**.
+
+#### Background
+
+To evaluate extinctions through time for _Leiocephalus_, we estimated extinction date ranges for known extinct species and predicted future extinction for extant species. This approach follows the one outlined in `vig_011_extinction`.
+
+The resulting order was used to compare changes in morphology as measured by PCA to expected patterns of NRE.
+
+### Setup
+
+Load required packages:
+
+```{r setup, echo=TRUE, message=FALSE, warning=FALSE}
+#load libraries
+library(leiocephalus) #this package
+library(dplyr) #easy wrangling
+library(tibble) #dataframe formatting
+library(tidyr) #easy tidying 
+library(stringr) #regex and such with strings
+library(ggplot2) #plotting
+library(here) #easy pathing
+library(patchwork) #combining plots
+library(magrittr) #better piping
+library(BSDA) #z test
+library(furrr) #move through things faster than for loops
+```
+
+We also set up some switches for the different PCA data partitions.
+```{r switches for PCA}
+
+#default: w/ SVL and trait correction
+#w/o SVL trait correction
+#w/ trait correction but no SVL
+#w/o trait correction and SVL
+
+#uses SVL to standardize all other traits
+svl.correct <- TRUE
+#use SVL in the PCA independent of svl.correct
+use.svl <- TRUE
+```
+
+
+Read in the PCA data in `.rda` form. We also remove the only currently extinct species from the data.
+
+```{r raw data}
+#nowto add in the ordering from the maxsvl data
+data(maxsvl, package = "leiocephalus")
+
+#get the extinction order in the leio object
+maxsvl <- maxsvl %>%
+  mutate(species = gsub(pattern = "Leiocephalus ", replacement = "", x = .[["species"]])) %>%
+  dplyr::select(species, where, `source for extinct:last seen`:extinct_order)
+
+
+#read for PCA data
+if(svl.correct == TRUE && use.svl == TRUE){
+  #default uses both
+  data(dat_pca_tidy, package = "leiocephalus")
+  #recode to leio to make it easier
+  leio <- dat_pca_tidy
+  #keep just columns we need
+  leio <- leio %>%
+    dplyr::select(species, notes:redlist2, PC1:PC15)
+  #join the ordering now
+  leio <- left_join(leio, maxsvl, by = "species") %>%
+  dplyr::select(species, notes, island_bank, where, redlist, redlist2, extinct_order_cluster:extinct_order, PC1:PC15)
+  
+} else if(svl.correct == TRUE && use.svl == FALSE){
+  #no svl in pca
+  data(dat_pca_tidy_nosvl, package = "leiocephalus")
+  #recode to leio to make it easier
+  leio <- dat_pca_tidy_nosvl
+  #keep just columns we need
+  leio <- leio %>%
+    dplyr::select(species, notes:redlist2, PC1:PC14)
+  #join the ordering now
+  leio <- left_join(leio, maxsvl, by = "species") %>%
+  dplyr::select(species, notes, island_bank, where, redlist, redlist2, extinct_order_cluster:extinct_order, PC1:PC14)
+  
+} else if(svl.correct == FALSE && use.svl == TRUE){
+  #no scaling version
+  data(dat_pca_tidy_norescale, package = "leiocephalus")
+   #recode to leio to make it easier
+  leio <- dat_pca_tidy_norescale
+  #keep just columns we need
+  leio <- leio %>%
+    dplyr::select(species, notes:redlist2, PC1:PC15)
+  #join the ordering now
+  leio <- left_join(leio, maxsvl, by = "species") %>%
+  dplyr::select(species, notes, island_bank, where, redlist, redlist2, extinct_order_cluster:extinct_order, PC1:PC15)
+  
+} else if(svl.correct == FALSE && use.svl == FALSE){
+  #no scaling and no svl
+  data(dat_pca_tidy_nosvl_norescale, package = "leiocephalus")
+  #recode to leio to make it easier
+  leio <- dat_pca_tidy_nosvl_norescale
+  #keep just columns we need
+  leio <- leio %>%
+    dplyr::select(species, notes:redlist2, PC1:PC14)
+  #join the ordering now
+  leio <- left_join(leio, maxsvl, by = "species") %>%
+  dplyr::select(species, notes, island_bank, where, redlist, redlist2, extinct_order_cluster:extinct_order, PC1:PC14)
+
+}
+
+#rm the extinct species Leiocephalus eremitus
+leio <- leio %>%
+  filter(redlist != "EX")
+```
+
+Read in the simulated data in `.rda` form. See simulations for more information.
+
+```{r read in simulations, eval=TRUE}
+if(TRUE){
+ 
+  #need to se the way the data are saved here based on the switches added
+if(svl.correct == TRUE && use.svl == TRUE){
+  #default uses both
+data(sim_extinction_present_pc1, package = "leiocephalus")
+data(sim_extinction_present_pc2, package = "leiocephalus")
+  #assign the sim data to correpsonding objects
+sim_extinction_pc1 <- sim_extinction_present_pc1
+sim_extinction_pc2 <- sim_extinction_present_pc2
+
+} else if(svl.correct == TRUE && use.svl == FALSE){
+  #default uses both
+data(sim_extinction_present_pc1_nosvl, package = "leiocephalus")
+data(sim_extinction_present_pc2_nosvl, package = "leiocephalus")
+  #assign the sim data to correpsonding objects
+sim_extinction_pc1 <- sim_extinction_present_pc1_nosvl
+sim_extinction_pc2 <- sim_extinction_present_pc2_nosvl
+
+} else if(svl.correct == FALSE && use.svl == TRUE){
+  #default uses both
+data(sim_extinction_present_pc1_norescale, package = "leiocephalus")
+data(sim_extinction_present_pc2_norescale, package = "leiocephalus")
+  #assign the sim data to correpsonding objects
+sim_extinction_pc1 <- sim_extinction_present_pc1_norescale
+sim_extinction_pc2 <- sim_extinction_present_pc2_norescale
+  
+} else if(svl.correct == FALSE && use.svl == FALSE){
+  #default uses both
+data(sim_extinction_present_pc1_nosvl_norescale, package = "leiocephalus")
+data(sim_extinction_present_pc2_nosvl_norescale, package = "leiocephalus")
+  #assign the sim data to correpsonding objects
+sim_extinction_pc1 <- sim_extinction_present_pc1_nosvl_norescale
+sim_extinction_pc2 <- sim_extinction_present_pc2_nosvl_norescale
+
+}
+   
+}
+```
+
+
+## Analyses & Visualization
+
+### Analyses
+
+Now, we are able to call `leiocephalus::stepwise_extinction()`, which takes a dataframe that contains columnes that contain: species, trait averages per species, and an order of extinction for the species. This function takes the input data and iterates through loss of each species in order and calculates the corresponding change to the **mean** and **variance** *from the starting mean and variance*. We will use the results of this function to plot alongside the simulated loss scenarios. We have also set up version of these functions that partition the extinctions into just the past (extinct species) and the present (extant but threatened species).
+
+Just like the body size extinction through time analysis, we need to break ties for empirical extinction order. We use a saved set of heuristics here as well.
+
+```{r ready the empirical extinction data, eval=FALSE}
+#generate the replicates of the extinction order
+empirical_extinct_reps <- replicate(sample_extinction(leio$extinct_order_cluster), n = 10000)
+#name the replicate columns
+colnames(empirical_extinct_reps) <- paste0("r", rep(1:10000))
+
+#bind the simulations and the original data
+leio_unclustered <- cbind(leio, empirical_extinct_reps)
+
+#save a version of this for consistent use
+empirical_extinct_reps_pca <- empirical_extinct_reps
+#save a version of this for consistent use
+if(FALSE){
+  save(empirical_extinct_reps_pca, file = file.path(here(), "data", "empirical_extinct_reps_pca.rda"))
+}
+```
+
+Read back in the saved heuristic version.
+```{r load the empirical extinction data}
+#load the heuristic replicates
+data(empirical_extinct_reps_pca, package = "leiocephalus")
+
+#rename to keep easier
+empirical_extinct_reps <- empirical_extinct_reps_pca
+
+#bind the simulations and the original data
+leio_unclustered <- cbind(leio, empirical_extinct_reps)
+```
+
+#### Show heuristic path
+
+Now we can run `stepwise_extinction()` on the mean values for each PC, just as in the other vignette.
+```{r get stepwise extinction ordering on broken ties sampling PC1}
+if(FALSE){
+#set the number of cores
+plan(multisession, workers = (availableCores()-2))
+
+#store the results of running the function on each replicate of furrr
+rep_emp_pc1 <- future_map_dfr(.x = 1:length(colnames(empirical_extinct_reps)), 
+                      .f = function(y) cbind(stepwise_extinction(x = if(use.svl == TRUE) {
+                        leio_unclustered %>% dplyr::select(species:PC15, paste0("r", y))
+                      } else{
+                        leio_unclustered %>% dplyr::select(species:PC14, paste0("r", y))
+                      },
+                      ordering = paste0("r", y), 
+                      trait = "PC1", 
+                      spp = "species", 
+                      rescale = TRUE, 
+                      sliding_eval = FALSE
+                      ), rep_num = factor(paste0("r", y))), 
+                      .progress = TRUE, 
+                      .options = furrr_options(seed = NULL, packages = c("magrittr", "slider", "dplyr"))
+                      )
+
+#return to sequential
+plan(sequential)
+#save a version of this for consistent use
+  save(rep_emp_pc1, file = file.path(here(), "data", "rep_emp_pc1.rda"))
+}
+
+data(rep_emp_pc1, package = "leiocephalus")
+
+
+#now we need to summarise the data about the reps to get our output that approximates the original empirical loss data (lacking a spp_rm column)
+leio_ex_pc1 <- rep_emp_pc1 %>%
+  group_by(n_spp) %>%
+  summarize(rep_avg_avg = mean(avg),
+            rep_avg_var = mean(var)
+            ) %>%
+  pivot_longer(cols = rep_avg_avg:rep_avg_var) %>%
+  arrange(-n_spp) %>%
+  mutate(metric = ifelse(test = grepl(pattern = "var$", x = name), yes = "var", no = "avg")) %>%
+  dplyr::select(-name) %>%
+  pivot_wider(names_from = metric, values_from = value)
+
+
+#demonstrate the results
+knitr::kable(leio_ex_pc1)
+
+ pp1_m <- rep_emp_pc1 %>%
+  #rm the last species loss entry
+  filter(n_spp > 1) %>% 
+  #mutate an alternative to n_spp that plots number of species extinct
+  mutate(n_extinct = max(n_spp) - n_spp) %>%
+  group_by(n_extinct) %>%
+  ggplot(data = ., aes(x = n_extinct)) +
+  annotate(geom = "rect", xmin = 0, xmax = 8, ymin = -Inf, ymax = Inf, alpha = 0.15) +
+  geom_line(aes(y = avg, color = rep_num), show.legend = F, alpha = 0.1) +
+  scale_x_continuous(limits = c(0, 32)) +
+  labs(x = "Number of Species Lost", y = expression(Delta~" Metric")) +
+  #group_by(n_spp) %>%
+  #ggplot(data = ., aes(x = n_spp)) +
+  #geom_line(aes(y = avg, color = rep_num), show.legend = F) +
+  #annotate(geom = "rect", xmin = 24, xmax = 32, ymin = -Inf, ymax = Inf, alpha = 0.25) +
+  #annotate(geom = "rect", xmin = 13, xmax = 24, ymin = -Inf, ymax = Inf, alpha = 0.15) +
+  #geom_line(aes(y = var, color = rep_num), show.legend = F, linetype = 2) +
+  #scale_x_reverse(limits = c(32, -1)) +
+  #labs(x = "Number of Species", y = expression(Delta~" Metric")) +
+  ylim(c(-10,10)) +
+  theme_bw() +
+  ggtitle("Resampled Mean") +
+  theme(panel.grid.minor = element_blank(),
+        panel.background = element_blank())
+ 
+  pp1_v <- rep_emp_pc1 %>%
+  #rm the last species loss entry
+  filter(n_spp > 1) %>% 
+  #mutate an alternative to n_spp that plots number of species extinct
+  mutate(n_extinct = max(n_spp) - n_spp) %>%
+  group_by(n_extinct) %>%
+  ggplot(data = ., aes(x = n_extinct)) +
+  annotate(geom = "rect", xmin = 0, xmax = 8, ymin = -Inf, ymax = Inf, alpha = 0.15) +
+  geom_line(aes(y = var, color = rep_num), show.legend = F, linetype = 2) +
+  scale_x_continuous(limits = c(0, 32)) +
+  labs(x = "Number of Species Lost", y = expression(Delta~" Metric")) +
+  #group_by(n_spp) %>%
+  #ggplot(data = ., aes(x = n_spp)) +
+  #annotate(geom = "rect", xmin = 24, xmax = 32, ymin = -Inf, ymax = Inf, alpha = 0.25) +
+  #annotate(geom = "rect", xmin = 13, xmax = 24, ymin = -Inf, ymax = Inf, alpha = 0.15) +
+  #scale_x_reverse(limits = c(32, -1)) +
+  ylim(c(-40,40)) +
+  #labs(x = "Number of Species", y = expression(Delta~" Metric")) +
+  theme_bw() +
+  ggtitle("Resampled Variance") +
+  theme(panel.grid.minor = element_blank(),
+        panel.background = element_blank())
+pp1_m / pp1_v
+```
+
+Now do the same for PC2
+```{r get stepwise extinction ordering on broken ties sampling PC2}
+if(FALSE){
+#set the number of cores
+plan(multisession, workers = (availableCores()-2))
+
+#store the results of running the function on each replicate of furrr
+rep_emp_pc2 <- future_map_dfr(.x = 1:length(colnames(empirical_extinct_reps)), 
+                      .f = function(y) cbind(stepwise_extinction(x = if(use.svl == TRUE) {
+                        leio_unclustered %>% dplyr::select(species:PC15, paste0("r", y))
+                      } else{
+                        leio_unclustered %>% dplyr::select(species:PC14, paste0("r", y))
+                      },
+                      ordering = paste0("r", y), 
+                      trait = "PC2", 
+                      spp = "species", 
+                      rescale = TRUE, 
+                      sliding_eval = FALSE
+                      ), rep_num = factor(paste0("r", y))), 
+                      .progress = TRUE, 
+                      .options = furrr_options(seed = NULL, packages = c("magrittr", "slider", "dplyr"))
+                      )
+
+#return to sequential
+plan(sequential)
+#save a version of this for consistent use
+  save(rep_emp_pc2, file = file.path(here(), "data", "rep_emp_pc2.rda"))
+}
+
+data(rep_emp_pc2, package = "leiocephalus")
+
+#now we need to summarise the data about the reps to get our output that approximates the original empirical loss data (lacking a spp_rm column)
+leio_ex_pc2 <- rep_emp_pc2 %>%
+  group_by(n_spp) %>%
+  summarize(rep_avg_avg = mean(avg),
+            rep_avg_var = mean(var)
+            ) %>%
+  pivot_longer(cols = rep_avg_avg:rep_avg_var) %>%
+  arrange(-n_spp) %>%
+  mutate(metric = ifelse(test = grepl(pattern = "var$", x = name), yes = "var", no = "avg")) %>%
+  dplyr::select(-name) %>%
+  pivot_wider(names_from = metric, values_from = value)
+
+
+#demonstrate the results
+knitr::kable(leio_ex_pc2)
+
+ pp2_m <- rep_emp_pc2 %>%
+  #rm the last species loss entry
+  filter(n_spp > 1) %>% 
+  #mutate an alternative to n_spp that plots number of species extinct
+  mutate(n_extinct = max(n_spp) - n_spp) %>%
+  group_by(n_extinct) %>%
+  ggplot(data = ., aes(x = n_extinct)) +
+  annotate(geom = "rect", xmin = 0, xmax = 8, ymin = -Inf, ymax = Inf, alpha = 0.15) +
+  geom_line(aes(y = avg, color = rep_num), show.legend = F) +
+  scale_x_continuous(limits = c(0, 32)) +
+  labs(x = "Number of Species Lost", y = expression(Delta~" Metric")) +
+  #group_by(n_spp) %>%
+  #ggplot(data = ., aes(x = n_spp)) +
+  #annotate(geom = "rect", xmin = 24, xmax = 32, ymin = -Inf, ymax = Inf, alpha = 0.25) +
+  #annotate(geom = "rect", xmin = 13, xmax = 24, ymin = -Inf, ymax = Inf, alpha = 0.15) +
+  #geom_line(aes(y = var, color = rep_num), show.legend = F, linetype = 2) +
+  #scale_x_reverse(limits = c(32, -1)) +
+  #labs(x = "Number of Species", y = expression(Delta~" Metric")) +
+  ylim(c(-5,5)) +
+  theme_bw() +
+  ggtitle("Resampled Mean") +
+  theme(panel.grid.minor = element_blank(),
+        panel.background = element_blank())
+ 
+  pp2_v <- rep_emp_pc2 %>%
+  #rm the last species loss entry
+  filter(n_spp > 1) %>% 
+  #mutate an alternative to n_spp that plots number of species extinct
+  mutate(n_extinct = max(n_spp) - n_spp) %>%
+  group_by(n_extinct) %>%
+  ggplot(data = ., aes(x = n_extinct)) +
+  annotate(geom = "rect", xmin = 0, xmax = 8, ymin = -Inf, ymax = Inf, alpha = 0.15) +
+  geom_line(aes(y = var, color = rep_num), show.legend = F, linetype = 2) +
+  scale_x_continuous(limits = c(0, 32)) +
+  labs(x = "Number of Species Lost", y = expression(Delta~" Metric")) +
+  #group_by(n_spp) %>%
+  #ggplot(data = ., aes(x = n_spp)) +
+  #annotate(geom = "rect", xmin = 24, xmax = 32, ymin = -Inf, ymax = Inf, alpha = 0.25) +
+  #annotate(geom = "rect", xmin = 13, xmax = 24, ymin = -Inf, ymax = Inf, alpha = 0.15) +
+  #scale_x_reverse(limits = c(32, -1)) +
+  #labs(x = "Number of Species", y = expression(Delta~" Metric")) +
+  ylim(c(-5,5)) +
+  theme_bw() +
+  ggtitle("Resampled Variance") +
+  theme(panel.grid.minor = element_blank(),
+        panel.background = element_blank())
+  
+pp2_m / pp2_v
+```
+
+```{r plot both sets of heuristics}
+(pp1_m / pp1_v) | (pp2_m / pp2_v)
+
+ggsave(((pp1_m / pp1_v) | (pp2_m / pp2_v)), filename = file.path(here(), "figures", "NRE_mPCA_heuristic.png"), width = 6.5, height = (5.5))
+```
+
+```{r stepwise extinction ordering}
+if(FALSE){
+  
+leio_ex_pc1 <- stepwise_extinction(x = leio,
+                               ordering = "extinct_order", 
+                               trait = "PC1", 
+                               spp = "species", 
+                               rescale = TRUE, 
+                               sliding_eval = FALSE
+                               )
+
+leio_ex_pc2 <- stepwise_extinction(x = leio,
+                               ordering = "extinct_order", 
+                               trait = "PC2", 
+                               spp = "species", 
+                               rescale = TRUE, 
+                               sliding_eval = FALSE
+                               )
+}
+
+```
+
+
+We also perform a quick pivot in the table to a longer form (tidier) to make plotting easier (not necessary for the analyses).
+
+```{r empirical pivot for plotting}
+#pivoting for plotting only
+leio_ex_pivot_pc1 <- leio_ex_pc1 %>%
+  pivot_longer(cols = avg:var, names_to = "metric") %>%
+  mutate(metric = gsub(pattern = "avg", x = metric, replacement = "mean")) %>%
+  mutate(metric = gsub(pattern = "var", x = metric, replacement = "variance"))
+
+leio_ex_pivot_pc2 <- leio_ex_pc2 %>%
+  pivot_longer(cols = avg:var, names_to = "metric") %>%
+  mutate(metric = gsub(pattern = "avg", x = metric, replacement = "mean")) %>%
+  mutate(metric = gsub(pattern = "var", x = metric, replacement = "variance"))
+```
+
+
+#### Simulations
+
+We can now use `leiocephalus::rnre()` to simulate loss under the following types of extinction:
+
+  1. Random
+  2. Directional (non-random)
+  3. Disruptive (non-random)
+  4. Stabilizing  (non-random)
+
+This process can be a bit lengthy to generate a reasonable null distribution. We show the code below to do so, but the code does not run in the vignette/Rmd file. Instead, we loaded a data object containing previous simulations ($10^4$) in the **Setup** section above. 
+
+```{r simulation data, eval=FALSE, echo=FALSE}
+if(FALSE){
+#create objects to store the simulation results
+
+#note that the following objects are in this process:
+#re: number of replicates
+#sr: number of species
+#ex: number of extinctions
+
+#version for leiocephalus
+#PAST
+#sr <- 32
+#ex <- 8
+#re <- 1e4
+
+#PRESENT PCA
+sr <- 22
+ex <- 8
+re <- 1e4
+
+#BOTH
+#sr <- 32
+#ex <- 18
+#re <- 1e4
+
+#we have to actually pull in the PC data
+pc_mean1 <- mean(leio %>% filter(extinct_order > 8) %>% .$PC1)
+pc_sd1 <- sd(leio %>% filter(extinct_order > 8) %>% .$PC1)
+pc_mean2 <- mean(leio %>% filter(extinct_order > 8) %>% .$PC2)
+pc_sd2 <- sd(leio %>% filter(extinct_order > 8) %>% .$PC2)
+
+
+#set the number of cores
+plan(multisession, workers = (availableCores()-1))
+
+#store the results of running the function on each replicate of furrr
+sim_extinction1 <- future_map_dfr(.x = 1:re, 
+                              .f = ~cbind(rnre(trait_x = rnorm(n = sr, mean = pc_mean1, sd = pc_sd1), n_ex = ex, rescale = TRUE, sides = "BOTH", sliding_eval = FALSE, eval_step = 1), rep = .x), 
+                              .progress = TRUE, 
+                              .options = furrr_options(seed = NULL, packages = c("magrittr", "slider", "dplyr"))
+) %>% 
+  as_tibble()
+
+#return to sequential
+plan(sequential)
+
+#save
+sim_extinction_present_pc1 <- sim_extinction1
+save(sim_extinction_present_pc1, file = file.path(here::here(), "data", "sim_extinction_present_pc1.rda"))
+
+#set the number of cores
+plan(multisession, workers = (availableCores()-1))
+
+#store the results of running the function on each replicate of furrr
+sim_extinction2 <- future_map_dfr(.x = 1:re, 
+                              .f = ~cbind(rnre(trait_x = rnorm(n = sr, mean = pc_mean2, sd = pc_sd2), n_ex = ex, rescale = TRUE, sides = "BOTH", sliding_eval = FALSE, eval_step = 1), rep = .x), 
+                              .progress = TRUE, 
+                              .options = furrr_options(seed = NULL, packages = c("magrittr", "slider", "dplyr"))
+) %>% 
+  as_tibble()
+
+#return to sequential
+plan(sequential)
+
+
+#save
+sim_extinction_present_pc2 <- sim_extinction2
+save(sim_extinction_present_pc2, file = file.path(here::here(), "data", "sim_extinction_present_pc2.rda"))
+
+#sim_extinction_present_pc1_nosvl_norescale <- sim_extinction
+#save(sim_extinction_present_pc1_nosvl_norescale, file = file.path(here::here(), "data", "sim_extinction_present_pc1_nosvl_norescale.rda"))
+#sim_extinction_present_pc2_nosvl_norescale <- sim_extinction
+#save(sim_extinction_present_pc2_nosvl_norescale, file = file.path(here::here(), "data", "sim_extinction_present_pc2_nosvl_norescale.rda"))
+
+}
+```
+
+#### Process to Test Model Fit
+
+1. Simulate a model $n=10^4$ times to get mean and variance values for that model over time ($y_{sim}$). For the mean and variance metrics we call these $y_{sim-mean}$ and $y_{sim-var}$.
+
+```{r get y_sim}
+#all version: PC1
+y_sim1 <- sim_extinction_pc1 %>%
+  group_by(type, n_spp)
+#all version: PC2
+y_sim2 <- sim_extinction_pc2 %>%
+  group_by(type, n_spp)
+```
+
+2. For $y_{sim-mean}$ and $y_{sim-var}$ for an extinction model, calculate the mean of the $n$ simulations at each time step ($\mu_{sim-mean}$ and $\mu_{sim-var}$).
+
+```{r get mu, message=FALSE}
+#all version: PC1
+mu_y_sim1 <- y_sim1 %>%
+  group_by(type, n_spp) %>%
+  summarize(mu_avg = mean(avg), mu_var = mean(var)) %>%
+  arrange(type, desc(n_spp))
+
+#all version: PC2
+mu_y_sim2 <- y_sim2 %>%
+  group_by(type, n_spp) %>%
+  summarize(mu_avg = mean(avg), mu_var = mean(var)) %>%
+  arrange(type, desc(n_spp))
+```
+
+3. For each simulated data set, calculate the root-mean-square error (RMSE) as the difference between $\mu$ and $y_{sim}$. Now you should have an $n$ length vector of $RMSE_{sim-mean}$ and one for $RSME_{sim-var}$.
+
+```{r get RMSE sim, message=FALSE}
+#all version: PC1
+RMSE_sim1 <- y_sim1 %>%
+  group_by(type, rep) %>%
+  arrange(type, rep, desc(n_spp)) %>%
+  left_join(., mu_y_sim1, by = c("type", "n_spp")) %>%
+  summarize(RMSE_avg = sqrt(mean((avg - mu_avg)^2)), RMSE_var = sqrt(mean((var - mu_var)^2)))
+
+#all version: PC2
+RMSE_sim2 <- y_sim2 %>%
+  group_by(type, rep) %>%
+  arrange(type, rep, desc(n_spp)) %>%
+  left_join(., mu_y_sim2, by = c("type", "n_spp")) %>%
+  summarize(RMSE_avg = sqrt(mean((avg - mu_avg)^2)), RMSE_var = sqrt(mean((var - mu_var)^2)))
+```
+
+E_sim is the difference between each observation in a simulation and the RMSE
+
+```{r get E sim}
+#all version: PC1
+E_sim1 <- y_sim1 %>%
+  group_by(type, rep) %>%
+  arrange(type, rep, desc(n_spp)) %>%
+  left_join(., mu_y_sim1, by = c("type", "n_spp")) %>%
+  mutate(E_avg = avg - mu_avg, E_var = var - mu_var)
+
+#all version: PC2
+E_sim2 <- y_sim2 %>%
+  group_by(type, rep) %>%
+  arrange(type, rep, desc(n_spp)) %>%
+  left_join(., mu_y_sim2, by = c("type", "n_spp")) %>%
+  mutate(E_avg = avg - mu_avg, E_var = var - mu_var)
+```
+
+4. Calculate the $RMSE_{obs-mean}$ and $RMSE_{obs-var}$ for $y_{obs}$ just like in the previous steps where $y_{obs}$ are observed data.
+
+```{r get RMSE obs, message=FALSE}
+#rename our empirical and filter to just the first 8 loss steps
+#PC1
+y_obs1 <- leio_ex_pc1 %>%
+  filter(n_spp < 23 & n_spp > 13)
+
+#PC2
+y_obs2 <- leio_ex_pc2 %>%
+  filter(n_spp < 23 & n_spp > 13)
+
+#all version: PC1
+RMSE_obs1 <- mu_y_sim1 %>%
+  left_join(y_obs1, ., by = "n_spp") %>%
+  #dplyr::select(-spp_rm, n_spp:var, mu_avg, mu_var, type) %>% #old version with non-sampling empirical method
+  dplyr::select(n_spp:var, mu_avg, mu_var, type) %>%
+  group_by(type) %>%
+  summarize(RMSE_avg = sqrt(mean((avg - mu_avg)^2)), RMSE_var = sqrt(mean((var - mu_var)^2))) 
+
+#all version: PC2
+RMSE_obs2 <- mu_y_sim2 %>%
+  left_join(y_obs2, ., by = "n_spp") %>%
+  #dplyr::select(-spp_rm, n_spp:var, mu_avg, mu_var, type) %>% #old version with non-sampling empirical method
+  dplyr::select(n_spp:var, mu_avg, mu_var, type) %>%
+  group_by(type) %>%
+  summarize(RMSE_avg = sqrt(mean((avg - mu_avg)^2)), RMSE_var = sqrt(mean((var - mu_var)^2)))
+```
+
+```{r get E obs}
+#PC1
+E_obs1 <- mu_y_sim1 %>%
+  left_join(y_obs1, ., by = "n_spp") %>%
+  #dplyr::select(-spp_rm, n_spp:var, mu_avg, mu_var, type) %>%
+  dplyr::select(n_spp:var, mu_avg, mu_var, type) %>%
+  #group_by(type, n_spp) %>%
+  mutate(E_avg = avg - mu_avg, E_var = var - mu_var)
+
+#PC2
+E_obs2 <- mu_y_sim2 %>%
+  left_join(y_obs2, ., by = "n_spp") %>%
+  #dplyr::select(-spp_rm, n_spp:var, mu_avg, mu_var, type) %>%
+  dplyr::select(n_spp:var, mu_avg, mu_var, type) %>%
+  #group_by(type, n_spp) %>%
+  mutate(E_avg = avg - mu_avg, E_var = var - mu_var)
+```
+
+5. Compare the obs to the sim for the mean and variance metrics with a K-S test.
+
+```{r try a K-S test, warning=FALSE, eval=FALSE, echo=FALSE}
+#make storage object: PC1
+ks_test1 <- tibble(model = rep(c("directional_l", "directional_r", "disruptive", "stabilizing", "random"), times = 2),
+        metric = sort(rep( c("mean", "variance"), times = 5)),
+        d_statistic = rep(NA, times = 10),
+        p_value = rep(NA, times = 10)
+)
+
+#make storage object: PC2
+ks_test2 <- tibble(model = rep(c("directional_l", "directional_r", "disruptive", "stabilizing", "random"), times = 2),
+        metric = sort(rep( c("mean", "variance"), times = 5)),
+        d_statistic = rep(NA, times = 10),
+        p_value = rep(NA, times = 10)
+)
+
+#PC1
+for(a in 1:length(unique(E_obs1$type))){
+  
+  ks_test1_avg <- ks.test(x = E_obs1 %>% filter(type == unique(E_obs1$type)[a]) %>% ungroup(.) %>% dplyr::select(E_avg) %>% unlist(.), 
+                         y = E_sim1 %>% filter(type == unique(E_obs1$type)[a]) %>% ungroup(.) %>% dplyr::select(E_avg) %>% unlist(.)
+                         )
+
+  ks_test1_var <- ks.test(x = E_obs1 %>% filter(type == unique(E_obs1$type)[a]) %>% ungroup(.) %>% dplyr::select(E_var) %>% unlist(.),
+                         y = E_sim1 %>% filter(type == unique(E_obs1$type)[a]) %>% ungroup(.) %>% dplyr::select(E_var) %>% unlist(.)
+                        )
+  
+#fill in the metrics and p values
+ks_test1$d_statistic[ks_test1$model == unique(E_obs1$type)[a] & ks_test1$metric == "mean"] <- ks_test1_avg$statistic
+ks_test1$p_value[ks_test1$model == unique(E_obs1$type)[a] & ks_test1$metric == "mean"] <- ks_test1_avg$p.value
+ks_test1$d_statistic[ks_test1$model == unique(E_obs1$type)[a] & ks_test1$metric == "variance"] <- ks_test1_var$statistic
+ks_test1$p_value[ks_test1$model == unique(E_obs1$type)[a] & ks_test1$metric == "variance"] <- ks_test1_var$p.value
+
+}
+
+#PC2
+for(a in 1:length(unique(E_obs2$type))){
+  
+  ks_test2_avg <- ks.test(x = E_obs2 %>% filter(type == unique(E_obs2$type)[a]) %>% ungroup(.) %>% dplyr::select(E_avg) %>% unlist(.), 
+                         y = E_sim2 %>% filter(type == unique(E_obs2$type)[a]) %>% ungroup(.) %>% dplyr::select(E_avg) %>% unlist(.)
+                         )
+
+  ks_test2_var <- ks.test(x = E_obs2 %>% filter(type == unique(E_obs2$type)[a]) %>% ungroup(.) %>% dplyr::select(E_var) %>% unlist(.),
+                         y = E_sim2 %>% filter(type == unique(E_obs2$type)[a]) %>% ungroup(.) %>% dplyr::select(E_var) %>% unlist(.)
+                        )
+  
+#fill in the metrics and p values
+ks_test2$d_statistic[ks_test2$model == unique(E_obs2$type)[a] & ks_test2$metric == "mean"] <- ks_test2_avg$statistic
+ks_test2$p_value[ks_test2$model == unique(E_obs2$type)[a] & ks_test2$metric == "mean"] <- ks_test2_avg$p.value
+ks_test2$d_statistic[ks_test2$model == unique(E_obs2$type)[a] & ks_test2$metric == "variance"] <- ks_test2_var$statistic
+ks_test2$p_value[ks_test2$model == unique(E_obs2$type)[a] & ks_test2$metric == "variance"] <- ks_test2_var$p.value
+
+}
+
+#PC1
+ks_test1 %>%
+  mutate(model = str_replace_all(model, c(
+    "directional_l" = "directional_small",
+    "directional_r" = "directional_large"
+  ))) %>%
+  group_by(metric) %>%
+  arrange(metric, p_value)
+
+#PC2
+ks_test2 %>%
+  mutate(model = str_replace_all(model, c(
+    "directional_l" = "directional_small",
+    "directional_r" = "directional_large"
+  ))) %>%
+  group_by(metric) %>%
+  arrange(metric, p_value)
+
+```
+
+Past table: For mean, both random and stabilizing are N.S. (potentially the target). Random also has a N.S. variance as well. However, given that stabilizing fits the mean better, this is not a clear message. We will need to do some sort of GoF test that gives a clearer answer.
+
+We have p-values and statistics for each of the metrics, but what if we look to test GoF for each entire model?
+
+6. Append $RMSE_{obs-mean}$ and $RMSE_{obs-var}$ values to the corresponding $RMSE_{sim-mean}$ and $RMSE_{sim-var}$ vectors and scale both vectors. The observed rescaled values are added back into `RMSE_obs` for plotting reference.
+
+```{r append RMSE_obs and scale, message=FALSE}
+#all version: PC1
+RMSE_both1 <- rbind(RMSE_sim1, RMSE_obs1 %>% mutate(rep = 0) %>% dplyr::select(type, rep, everything()))
+
+#populate where the scaled values will go in the object
+RMSE_both1 <- RMSE_both1 %>%
+  mutate(RMSE_avg_scale = as.numeric(NA), RMSE_var_scale = as.numeric(NA))
+
+#now we use a loop to pull out types and sequentially rescale
+for(b in 1:length(unique(RMSE_sim1$type))){
+  
+  #filter, then rescale, then remove empirical
+  RMSE_both1[RMSE_both1$type == unique(RMSE_sim1$type)[b],colnames(RMSE_both1) %in% c("RMSE_avg_scale")] <- RMSE_both1 %>%
+    ungroup(.) %>%
+    filter(type %in% unique(RMSE_sim1$type)[b]) %>%
+    mutate(RMSE_avg_scale = scale(x = RMSE_avg, center = T, scale = T)) %>%
+    dplyr::select(RMSE_avg_scale) %>%
+    unlist(.)
+
+  RMSE_both1[RMSE_both1$type == unique(RMSE_sim1$type)[b],colnames(RMSE_both1) %in% c("RMSE_var_scale")] <- RMSE_both1 %>%
+   ungroup(.) %>%
+   filter(type %in% unique(RMSE_sim1$type)[b]) %>%
+   mutate(RMSE_var_scale = scale(x = RMSE_var, center = T, scale = T)) %>%
+   dplyr::select(RMSE_var_scale) %>%
+   unlist(.)
+    
+}
+
+RMSE_obs1 <- RMSE_both1 %>%
+  filter(rep == 0) %>%
+  dplyr::select(-rep) %>%
+  left_join(RMSE_obs1, .)
+
+
+
+#all version: PC2
+RMSE_both2 <- rbind(RMSE_sim2, RMSE_obs2 %>% mutate(rep = 0) %>% dplyr::select(type, rep, everything()))
+
+#populate where the scaled values will go in the object
+RMSE_both2 <- RMSE_both2 %>%
+  mutate(RMSE_avg_scale = as.numeric(NA), RMSE_var_scale = as.numeric(NA))
+
+#now we use a loop to pull out types and sequentially rescale
+for(b in 1:length(unique(RMSE_sim2$type))){
+  
+  #filter, then rescale, then remove empirical
+  RMSE_both2[RMSE_both2$type == unique(RMSE_sim2$type)[b],colnames(RMSE_both2) %in% c("RMSE_avg_scale")] <- RMSE_both2 %>%
+    ungroup(.) %>%
+    filter(type %in% unique(RMSE_sim2$type)[b]) %>%
+    mutate(RMSE_avg_scale = scale(x = RMSE_avg, center = T, scale = T)) %>%
+    dplyr::select(RMSE_avg_scale) %>%
+    unlist(.)
+
+  RMSE_both2[RMSE_both2$type == unique(RMSE_sim2$type)[b],colnames(RMSE_both2) %in% c("RMSE_var_scale")] <- RMSE_both2 %>%
+   ungroup(.) %>%
+   filter(type %in% unique(RMSE_sim2$type)[b]) %>%
+   mutate(RMSE_var_scale = scale(x = RMSE_var, center = T, scale = T)) %>%
+   dplyr::select(RMSE_var_scale) %>%
+   unlist(.)
+    
+}
+
+RMSE_obs2 <- RMSE_both2 %>%
+  filter(rep == 0) %>%
+  dplyr::select(-rep) %>%
+  left_join(RMSE_obs2, .)
+```
+
+7. Now calculate $\mu_{RMSE-sim-mean}$ and $\mu_{RMSE-sim-var}$.
+
+```{r calculate mu-RMSE-sim-mean and -sim-var, message=FALSE}
+#filter out the empirical data (rep != 0)
+
+#all version: PC1
+mu_RMSE_sim1 <- RMSE_both1 %>%
+  filter(rep != 0) %>%
+  group_by(type) %>%
+  summarize(mu_RMSE_avg = mean(RMSE_avg_scale), mu_RMSE_var = mean(RMSE_var_scale))
+
+#all version: PC2
+mu_RMSE_sim2 <- RMSE_both2 %>%
+  filter(rep != 0) %>%
+  group_by(type) %>%
+  summarize(mu_RMSE_avg = mean(RMSE_avg_scale), mu_RMSE_var = mean(RMSE_var_scale))
+```
+
+8. For each sim calculate the Euclidean distances from $\mu_{RMSE-sim-mean}$ and $\mu_{RMSE-sim-var}$ to $RMSE_{sim-mean}$ and $RMSE_{sim-var}$. This is your distribution for the model.
+
+```{r euclid dist for sim}
+#all version: PC1
+euclid_sim_final1 <- RMSE_both1 %>%
+  filter(rep != 0) %>%
+  dplyr::select(type, rep, RMSE_avg_scale:RMSE_var_scale) %>%
+  group_by(type) %>%
+  mutate(euclid_sim = sqrt(((RMSE_avg_scale - mu_RMSE_sim1$mu_RMSE_avg)^2) + ((RMSE_var_scale - mu_RMSE_sim1$mu_RMSE_var)^2)))
+
+#all version: PC2
+euclid_sim_final2 <- RMSE_both2 %>%
+  filter(rep != 0) %>%
+  dplyr::select(type, rep, RMSE_avg_scale:RMSE_var_scale) %>%
+  group_by(type) %>%
+  mutate(euclid_sim = sqrt(((RMSE_avg_scale - mu_RMSE_sim2$mu_RMSE_avg)^2) + ((RMSE_var_scale - mu_RMSE_sim2$mu_RMSE_var)^2)))
+```
+
+9. Calculate the Euclidean distance for $RMSE_{obs-mean}$ and $RMSE_{obs-var}$ like above. This is the goodness of fit metric.
+
+```{r euclid dist for obs, echo=FALSE}
+#all version: PC1
+euclid_obs_final1 <- RMSE_obs1 %>%
+  mutate(euclid_obs = sqrt(((RMSE_avg_scale - mu_RMSE_sim1$mu_RMSE_avg)^2) + ((RMSE_var_scale - mu_RMSE_sim1$mu_RMSE_var)^2))) %>%
+  arrange(euclid_obs)
+
+euclid_obs_final1 %>%
+  mutate(type = str_replace_all(type, c(
+    "directional_l" = "directional_small",
+    "directional_r" = "directional_large"
+  ))) %>%
+  rename("model" = "type")
+
+#all version: PC2
+euclid_obs_final2 <- RMSE_obs2 %>%
+  mutate(euclid_obs = sqrt(((RMSE_avg_scale - mu_RMSE_sim2$mu_RMSE_avg)^2) + ((RMSE_var_scale - mu_RMSE_sim2$mu_RMSE_var)^2))) %>%
+  arrange(euclid_obs)
+
+euclid_obs_final2 %>%
+  mutate(type = str_replace_all(type, c(
+    "directional_l" = "directional_small",
+    "directional_r" = "directional_large"
+  ))) %>%
+  rename("model" = "type")
+```
+##### Significance testing
+
+10. To get a p-value for your goodness of fit metric, use a z-test, but first look at the data and make sure it is normal… it turns out that it likely deviates from normal. Therefore, we use a one sample Wilcoxon signed rank test.
+
+x in the z.test: calculate centroid of simulations (`mu_RMSE_sim`), calculate euclidean distance of the centroid to the simulated data
+
+```{r zt test, echo=FALSE, eval=FALSE}
+#make the holder for results
+zt_test1 <- tibble(model = rep(c("directional_l", "directional_r", "disruptive", "stabilizing", "random"), times = 1),
+                   z_statistic = rep(NA, times = 5),
+                   p_value = rep(NA, times = 5)
+)
+zt_test2 <- tibble(model = rep(c("directional_l", "directional_r", "disruptive", "stabilizing", "random"), times = 1),
+                   z_statistic = rep(NA, times = 5),
+                   p_value = rep(NA, times = 5)
+)
+
+#PC1
+#now let's loop to test with z_test modification of t_test
+for(d in 1:length(unique(euclid_obs_final1$type))){
+  
+  zt_test_hold <- z.test(x = euclid_sim_final1 %>% filter(type == unique(euclid_obs_final1$type)[d]) %>% ungroup(.) %>% dplyr::select(euclid_sim) %>% unlist(.), 
+                         mu = euclid_obs_final1 %>% filter(type == unlist(unique(euclid_obs_final1$type)[d])) %>% ungroup(.) %>% dplyr::select(euclid_obs) %>% unlist(.),
+                         alternative = "less",
+                         sigma.x = euclid_sim_final1 %>% filter(type == unique(euclid_obs_final1$type)[d]) %>% ungroup(.) %>% dplyr::select(euclid_sim) %>% unlist(.) %>% sd()
+  )
+  
+  #fill in the metrics and p values
+  zt_test1$z_statistic[zt_test1$model == unique(euclid_obs_final1$type)[d]] <- zt_test_hold$statistic
+  zt_test1$p_value[zt_test1$model == unique(euclid_obs_final1$type)[d]] <- zt_test_hold$p.value
+  
+}
+
+zt_test1 %>%
+  mutate(model = str_replace_all(model, c(
+    "directional_l" = "directional_small",
+    "directional_r" = "directional_large"))
+  ) %>%
+  mutate(p_value_rev = 1-p_value) %>%
+  arrange(desc(z_statistic))
+
+#PC2
+#now let's loop to test with z_test modification of t_test
+for(d in 1:length(unique(euclid_obs_final2$type))){
+  
+  zt_test_hold <- z.test(x = euclid_sim_final2 %>% filter(type == unique(euclid_obs_final2$type)[d]) %>% ungroup(.) %>% dplyr::select(euclid_sim) %>% unlist(.), 
+                         mu = euclid_obs_final2 %>% filter(type == unlist(unique(euclid_obs_final2$type)[d])) %>% ungroup(.) %>% dplyr::select(euclid_obs) %>% unlist(.),
+                         alternative = "less",
+                         sigma.x =euclid_sim_final2 %>% filter(type == unique(euclid_obs_final2$type)[d]) %>% ungroup(.) %>% dplyr::select(euclid_sim) %>% unlist(.) %>% sd()
+  )
+  
+  #fill in the metrics and p values
+  zt_test2$z_statistic[zt_test2$model == unique(euclid_obs_final2$type)[d]] <- zt_test_hold$statistic
+  zt_test2$p_value[zt_test2$model == unique(euclid_obs_final2$type)[d]] <- zt_test_hold$p.value
+  
+}
+
+zt_test2 %>%
+  mutate(model = str_replace_all(model, c(
+    "directional_l" = "directional_small",
+    "directional_r" = "directional_large"))
+  ) %>%
+  mutate(p_value_rev = 1-p_value) %>%
+  arrange(desc(z_statistic))
+```
+
+In this test, we want to fail to reject the left tail $H_0$ for a model, as this means that the extinction model could have the same or greater Euclidean distance from the point $(\mu_{RMSE-sim-mean}, \mu_{RMSE-sim-var})$ compared to the observed data distance.
+
+wilcox.test (less than, not 2 sided)
+    - Null Hypothesis $H_0$: The population median ($\eta$) is greater than or equal to hypothesized median
+    - Alternative Hypothesis $H_1$: The population median($\eta$) is less than the hypothesized median
+
+```{r one-sample wilcoxon, echo=FALSE}
+#make storage objects
+w_test1 <- tibble(model = rep(c("directional_l", "directional_r", "disruptive", "stabilizing", "random"), times = 1),
+        v_statistic = rep(NA, times = 5),
+        p_value = rep(NA, times = 5)
+)
+w_test2 <- tibble(model = rep(c("directional_l", "directional_r", "disruptive", "stabilizing", "random"), times = 1),
+        v_statistic = rep(NA, times = 5),
+        p_value = rep(NA, times = 5)
+)
+
+#set an order for evaluation
+extinction_models <- c("directional_l", "directional_r", "disruptive", "stabilizing", "random")
+
+#pc1
+for(c in seq_along(extinction_models)){
+  
+  w_test_hold1 <- wilcox.test(x = euclid_sim_final1 %>% filter(type == extinction_models[c]) %>% ungroup(.) %>% dplyr::select(euclid_sim) %>% unlist(.), 
+                         mu = euclid_obs_final1 %>% filter(type == extinction_models[c]) %>% ungroup(.) %>% dplyr::select(euclid_obs) %>% unlist(.),
+                         alternative = "less"
+                         )
+#pc2
+    w_test_hold2 <- wilcox.test(x = euclid_sim_final2 %>% filter(type == extinction_models[c]) %>% ungroup(.) %>% dplyr::select(euclid_sim) %>% unlist(.), 
+                         mu = euclid_obs_final2 %>% filter(type == extinction_models[c]) %>% ungroup(.) %>% dplyr::select(euclid_obs) %>% unlist(.),
+                         alternative = "less"
+                         )
+  
+#fill in the metrics and p values
+  #pc1
+w_test1$v_statistic[w_test1$model == extinction_models[c]] <- w_test_hold1$statistic
+w_test1$p_value[w_test1$model == extinction_models[c]] <- w_test_hold1$p.value
+  #pc2
+w_test2$v_statistic[w_test2$model == extinction_models[c]] <- w_test_hold2$statistic
+w_test2$p_value[w_test2$model == extinction_models[c]] <- w_test_hold2$p.value
+
+}
+
+#report statistics and p-values
+#pc1
+w_test1 %>%
+  mutate(model = str_replace_all(model, c(
+    "directional_l" = "directional_small",
+    "directional_r" = "directional_large"))
+    ) %>%
+  mutate(p_value_rev = 1-p_value) %>%
+  arrange(desc(v_statistic))
+#pc2
+w_test2 %>%
+  mutate(model = str_replace_all(model, c(
+    "directional_l" = "directional_small",
+    "directional_r" = "directional_large"))
+    ) %>%
+  mutate(p_value_rev = 1-p_value) %>%
+  arrange(desc(v_statistic))
+```
+
+We pivot the simulation data similarly to the empirical data below. For our simulations, we first summarize the data by calculating the following quantiles through loss (25%, 50% (median), and 75%) for both **mean** and **variance**. We also have a version of this 
+
+```{r simulation pivot for plotting, echo=FALSE, message=FALSE}
+#PC1
+summary_sim_extinction_pc1 <- sim_extinction_pc1 %>%
+  group_by(type, n_spp) %>%
+  summarise(quantile_0.50 = median(var), quantile_0.25 = quantile(var, probs = 0.25), quantile_0.75 = quantile(var, probs = 0.75), quantile_0.025 = quantile(var, probs = 0.025), quantile_0.975 = quantile(var, probs = 0.975), mquantile_0.50 = median(avg), mquantile_0.25 = quantile(avg, probs = 0.25), mquantile_0.75 = quantile(avg, probs = 0.75), mquantile_0.025 = quantile(avg, probs = 0.025), mquantile_0.975 = quantile(avg, probs = 0.975)) %>%
+  pivot_longer(cols = quantile_0.50:mquantile_0.975) %>%
+  mutate(metric = ifelse(test = grepl(pattern = "^quantile", x = name), yes = "variance", no = "mean")) %>%
+  mutate(name = gsub(pattern = "^mquantile", x = name, replacement = "quantile")) %>%
+  pivot_wider(names_from = name, values_from = value) %>%
+  group_by(type, n_spp, metric)
+
+#PC2
+summary_sim_extinction_pc2 <- sim_extinction_pc2 %>%
+  group_by(type, n_spp) %>%
+  summarise(quantile_0.50 = median(var), quantile_0.25 = quantile(var, probs = 0.25), quantile_0.75 = quantile(var, probs = 0.75), quantile_0.025 = quantile(var, probs = 0.025), quantile_0.975 = quantile(var, probs = 0.975), mquantile_0.50 = median(avg), mquantile_0.25 = quantile(avg, probs = 0.25), mquantile_0.75 = quantile(avg, probs = 0.75), mquantile_0.025 = quantile(avg, probs = 0.025), mquantile_0.975 = quantile(avg, probs = 0.975)) %>%
+  pivot_longer(cols = quantile_0.50:mquantile_0.975) %>%
+  mutate(metric = ifelse(test = grepl(pattern = "^quantile", x = name), yes = "variance", no = "mean")) %>%
+  mutate(name = gsub(pattern = "^mquantile", x = name, replacement = "quantile")) %>%
+  pivot_wider(names_from = name, values_from = value) %>%
+  group_by(type, n_spp, metric)
+```
+
+### Visualization
+
+#### Loss steps plots
+
+We can now quickly visualize loss through "time" and the changes to both metrics we are evaluating. Note that with this data format, we can easily extract just one metric by `dplyr::filter()`ing for the metric before plotting (see commented line).
+
+```{r plotting empirical extinction order, warning=FALSE, echo=FALSE}
+p_pc1 <- leio_ex_pivot_pc1 %>%
+  filter(n_spp < 23 & n_spp > 13) %>%
+ggplot(data = ., aes(x = n_spp)) +
+  geom_line(aes(y = value, linetype = metric)) +
+  scale_x_reverse(limits = c(32, -1)) +
+  ylim(c(-1.55,1.55)) +
+  scale_linetype_manual(values = c(1,2)) +
+  labs(x = "Number of Species", y = expression(Delta~" Metric")) +
+  theme_bw() +
+  theme(panel.grid.minor = element_blank(),
+        panel.background = element_blank()) +
+  ggtitle("PC1")
+
+p_pc2 <- leio_ex_pivot_pc2 %>%
+  filter(n_spp < 23 & n_spp > 13) %>%
+ggplot(data = ., aes(x = n_spp)) +
+  geom_line(aes(y = value, linetype = metric)) +
+  scale_x_reverse(limits = c(32, -1)) +
+  ylim(c(-1.55,1.55)) +
+  scale_linetype_manual(values = c(1,2)) +
+  labs(x = "Number of Species", y = expression(Delta~" Metric")) +
+  theme_bw() +
+  theme(panel.grid.minor = element_blank(),
+        panel.background = element_blank()) +
+  ggtitle("PC2")
+
+#take the legend off the first one and use patchwork to plot together!
+p_pc1 + theme(legend.position = "none") + p_pc2
+```
+
+
+We can also do the same for simulated data:
+
+```{r plotting simulated extinction order, warning=FALSE, echo=FALSE, fig.height=10, fig.width=12}
+p1 <- summary_sim_extinction_pc1 %>%
+   filter(n_spp < 23 & n_spp > 13) %>%
+   ungroup(.) %>%
+   mutate(type = str_replace_all(type, c(
+    "directional_l" = "directional_small",
+    "directional_r" = "directional_large"))
+    ) %>%
+  mutate(type = factor(type, levels = c("directional_small", "directional_large", "disruptive", "stabilizing", "random"))) %>%
+  #mutate an alternative to n_spp that plots number of species extinct
+  mutate(n_extinct = max(n_spp) - n_spp) %>%
+  group_by(type, n_extinct, metric) %>%
+  ggplot(data = ., aes(x = n_extinct)) +
+  geom_line(aes(y = quantile_0.50, color = type, linetype = metric)) +
+  #annotate(geom = "rect", xmin = 0, xmax = 8, ymin = -Inf, ymax = Inf, alpha = 0.15) +
+  scale_x_continuous(limits = c(0, 10), breaks = seq(0,10,2)) +
+  labs(x = "Number of Species Lost", y = expression(Delta~" Metric")) +
+  geom_ribbon(data = . %>% filter(metric == "mean"), aes(ymin = quantile_0.025, ymax = quantile_0.975, fill = type), alpha = 0.25) +
+  geom_ribbon(data = . %>% filter(metric == "variance"), aes(ymin = quantile_0.025, ymax = quantile_0.975, fill = type), alpha = 0.25) +
+  #group_by(type, n_spp, metric) %>%
+  #ggplot(data = ., aes(x = n_spp)) +
+  #scale_x_reverse(limits = c(32, 14)) +
+  #scale_x_reverse(limits = c(22,14)) +
+  #labs(x = "Number of Species", y = expression(Delta~" Metric")) +
+  scale_linetype_manual(values = c(1,2), labels = NULL, guide = NULL) +
+  facet_grid(metric~type, scales = "free_y") +
+  labs(color = "Model") +
+    scale_color_manual(values = c("directional_small" = "#A3A500", "directional_large" = "#F8766D", "disruptive" = "#00BF7D", "stabilizing" = "#E76BF3", "random" = "#00B0F6")) +
+  scale_fill_manual(values = c("directional_small" = "#A3A500", "directional_large" = "#F8766D", "disruptive" = "#00BF7D", "stabilizing" = "#E76BF3", "random" = "#00B0F6")) +
+  theme_bw() +
+    theme(panel.grid.minor = element_blank(),
+        panel.background = element_blank(),
+        legend.position = "none"
+        ) +
+   ggtitle("PC1")
+
+p2 <- summary_sim_extinction_pc2 %>%
+   filter(n_spp < 23 & n_spp > 13) %>%
+   ungroup(.) %>%
+   mutate(type = str_replace_all(type, c(
+    "directional_l" = "directional_small",
+    "directional_r" = "directional_large"))
+    ) %>%
+  mutate(type = factor(type, levels = c("directional_small", "directional_large", "disruptive", "stabilizing", "random"))) %>%
+    #mutate an alternative to n_spp that plots number of species extinct
+  mutate(n_extinct = max(n_spp) - n_spp) %>%
+  group_by(type, n_extinct, metric) %>%
+  ggplot(data = ., aes(x = n_extinct)) +
+  geom_line(aes(y = quantile_0.50, color = type, linetype = metric)) +
+    #annotate(geom = "rect", xmin = 0, xmax = 8, ymin = -Inf, ymax = Inf, alpha = 0.15) +
+  scale_x_continuous(limits = c(0, 10), breaks = seq(0,10,2)) +
+  labs(x = "Number of Species Lost", y = expression(Delta~" Metric")) +
+  geom_ribbon(data = . %>% filter(metric == "mean"), aes(ymin = quantile_0.025, ymax = quantile_0.975, fill = type), alpha = 0.25) +
+  geom_ribbon(data = . %>% filter(metric == "variance"), aes(ymin = quantile_0.025, ymax = quantile_0.975, fill = type), alpha = 0.25) +
+  #group_by(type, n_spp, metric) %>%
+  #ggplot(data = ., aes(x = n_spp)) +
+  #annotate(geom = "rect", xmin = 24, xmax = 32, ymin = -Inf, ymax = Inf, alpha = 0.15) +
+  #scale_x_reverse(limits = c(32, 14)) +
+  #scale_x_reverse(limits = c(22,14)) +
+  #ylim(c(-5,5)) +
+  #labs(x = "Number of Species", y = expression(Delta~" Metric")) +
+  scale_linetype_manual(values = c(1,2), labels = NULL, guide = NULL) +
+  facet_grid(metric~type, scales = "free_y") +
+  labs(color = "Model") +
+    scale_color_manual(values = c("directional_small" = "#A3A500", "directional_large" = "#F8766D", "disruptive" = "#00BF7D", "stabilizing" = "#E76BF3", "random" = "#00B0F6")) +
+  scale_fill_manual(values = c("directional_small" = "#A3A500", "directional_large" = "#F8766D", "disruptive" = "#00BF7D", "stabilizing" = "#E76BF3", "random" = "#00B0F6")) +
+  theme_bw() +
+    theme(panel.grid.minor = element_blank(),
+        panel.background = element_blank(),
+        legend.position = "none"
+        ) +
+    ggtitle("PC2")
+
+p1 / p2
+```
+
+```{r put them together, fig.height=10, fig.width=12}
+p1 <- p1 +
+  geom_line(data = leio_ex_pivot_pc1 %>% filter(n_spp < 23 & n_spp > 13) %>% mutate(n_extinct = max(n_spp) - n_spp), aes(y = value, linetype = metric)) #+
+  #annotate(geom = "rect", xmin = 24, xmax = 32, ymin = -Inf, ymax = Inf, alpha = 0.15)
+
+p2 <- p2 +
+  geom_line(data = leio_ex_pivot_pc2 %>% filter(n_spp < 23 & n_spp > 13) %>% mutate(n_extinct = max(n_spp) - n_spp), aes(y = value, linetype = metric)) #+
+  #annotate(geom = "rect", xmin = 24, xmax = 32, ymin = -Inf, ymax = Inf, alpha = 0.15)
+
+p1 / p2
+
+#ggsave(p1, filename = file.path(here(), "figures", "NRE_mPCA_extinction_time_PC1.png"), width = 6.5, height = 4.64)
+#ggsave(p2, filename = file.path(here(), "figures", "NRE_mPCA_extinction_time_PC2.png"), width = 6.5, height = 4.64)
+
+#ggsave((p1 / p2), filename = file.path(here(), "figures", "NRE_mPCA_extinction_time_v2.png"), width = 6.5, height = (4.64*1.5))
+```
+
+Now we run a quick save on our plotting objects to create the composite and inset figure for the paper.
+
+```{r save the plots to inset, eval = TRUE}
+#quick renaming of objects to save
+extinction_pc1 <- p1
+extinction_pc2 <- p2
+
+save(extinction_pc1,  file = file.path(here(), "data", "extinction_pc1.rda"))
+save(extinction_pc2,  file = file.path(here(), "data", "extinction_pc2.rda"))
+
+```
+
+We also want to make an individual panel of the best model to use as an inset saved for the PCA.
+
+```{r get best model plots}
+#step 1: figure out the color (we do this with the function and getting the model from left to right that we want)
+model_cols <- scales::hue_pal()(5)
+
+#isolate the best model
+p1_best <- p1
+p1_best$data <- p1$data %>% group_by(type) %>% filter(type == "random")
+p2_best <- p2
+p2_best$data <- p2$data %>% group_by(type) %>% filter(type == "stabilizing")
+
+
+#fix the axes a bit to make life easier for saving
+p1_best <- p1_best + 
+  ggtitle("") + 
+  #scale_x_continuous(breaks = c(20,15), limits = c(22,14), trans = "reverse") +
+  ylim(c(-4,4)) +
+  theme(plot.background = element_rect(fill = "transparent", color = NA), 
+        panel.grid.minor = element_blank()
+        )
+p2_best <- p2_best + 
+  ggtitle("") + 
+  #scale_x_continuous(breaks = c(20,15), limits = c(22,14), trans = "reverse") + 
+  ylim(c(-4,4)) +
+  #labs(x = "Number of Species", y = "") +
+  theme(plot.background = element_rect(fill = "transparent", color = NA), 
+        panel.grid.minor = element_blank()
+        )      
+
+
+#use ggplot_build() to make an object that can have attributes edited
+q1_best <- ggplot_build(p1_best)
+q2_best <- ggplot_build(p2_best)
+
+
+#reassign the colour and fill attributes in $data[[1:3]]
+q1_best$data[[1]]$colour <- model_cols[4]
+q1_best$data[[2]]$fill <- model_cols[4]
+q1_best$data[[3]]$fill <- model_cols[4]
+q2_best$data[[1]]$colour <- model_cols[5]
+q2_best$data[[2]]$fill <- model_cols[5]
+q2_best$data[[3]]$fill <- model_cols[5]
+
+#build it back
+p1_best <- ggplot_gtable(q1_best)
+p2_best <- ggplot_gtable(q2_best)
+
+#turn the grob to a ggplot2 object
+p1_best <- ggplotify::as.ggplot(p1_best)
+p2_best <- ggplotify::as.ggplot(p2_best)
+
+#show the colors returned
+p1_best + p2_best
+
+
+### version that does a play example for explaining in talks
+p2_example <- summary_sim_extinction_pc2 %>%
+   filter(n_spp < 23 & n_spp > 13) %>%
+   ungroup(.) %>%
+   mutate(type = str_replace_all(type, c(
+    "directional_l" = "directional_small",
+    "directional_r" = "directional_large"))
+    ) %>%
+  mutate(type = factor(type, levels = c("directional_small", "directional_large", "disruptive", "stabilizing", "random"))) %>%
+  #mutate an alternative to n_spp that plots number of species extinct
+  mutate(n_extinct = max(n_spp) - n_spp) %>%
+  group_by(type, n_extinct, metric) %>%
+  ggplot(data = ., aes(x = n_extinct)) +
+  geom_line(aes(y = quantile_0.50, color = type, linetype = metric)) +
+  #annotate(geom = "rect", xmin = 0, xmax = 8, ymin = -Inf, ymax = Inf, alpha = 0.15) +
+  scale_x_continuous(limits = c(0, 10), breaks = seq(0,10,2)) +
+  labs(x = "Number of Species Lost", y = expression(Delta~" Metric")) +
+  #geom_ribbon(data = . %>% filter(metric == "mean"), aes(ymin = quantile_0.025, ymax = quantile_0.975, fill = type), alpha = 0.25) +
+  #geom_ribbon(data = . %>% filter(metric == "variance"), aes(ymin = quantile_0.025, ymax = quantile_0.975, fill = type), alpha = 0.25) +
+  #group_by(type, n_spp, metric) %>%
+  #ggplot(data = ., aes(x = n_spp)) +
+  #scale_x_reverse(limits = c(32, 14)) +
+  #scale_x_reverse(limits = c(22,14)) +
+  #labs(x = "Number of Species", y = expression(Delta~" Metric")) +
+  scale_linetype_manual(values = c(1,2), labels = NULL, guide = NULL) +
+  facet_grid(metric~type, scales = "free_y") +
+  labs(color = "Model") +
+    scale_color_manual(values = c("directional_small" = "#A3A500", "directional_large" = "#F8766D", "disruptive" = "#00BF7D", "stabilizing" = "#E76BF3", "random" = "#00B0F6")) +
+  #scale_fill_manual(values = c("directional_small" = "#A3A500", "directional_large" = "#F8766D", "disruptive" = "#00BF7D", "stabilizing" = "#E76BF3", "random" = "#00B0F6")) +
+  theme_bw() +
+    theme(panel.grid.minor = element_blank(),
+        panel.background = element_blank(),
+        legend.position = "none"
+        )
+
+p2_test <- p2_example
+p2_test$data <- p2$data %>% group_by(type) %>% filter(type == "directional_large")
+#fix the axes a bit to make life easier for saving
+p2_test <- p2_test + 
+  ggtitle("") + 
+  #scale_x_continuous(breaks = c(20,15), limits = c(22,14), trans = "reverse") +
+  ylim(c(-3,3)) +
+  theme(plot.background = element_rect(fill = "transparent", color = NA), 
+        panel.grid.minor = element_blank()
+        )
+
+ggsave(p2_test, filename = file.path(here(), "figures", "example_nre_lineonly.png"), width = 4, height = 3)
+
+```
+
+```{r save the best plots for each pc, eval=TRUE}
+#quick renaming of objects to save
+extinction_pc1_best <- p1_best
+extinction_pc2_best <- p2_best
+
+save(extinction_pc1_best,  file = file.path(here(), "data", "extinction_pc1_best.rda"))
+save(extinction_pc2_best,  file = file.path(here(), "data", "extinction_pc2_best.rda"))
+
+```
+
+#### Euclidean distances plots
+
+As a sidebar, you can visualize this by plotting $RMSE_{sim-mean}$ and $RMSE_{sim-var}$ as a scatterplot and putting an X for the centroid and then seeing where $RMSE_{obs}$ falls.
+
+```{r plot the GoF, echo=FALSE}
+#PC1
+p_euclid1 <- ggplot() +
+  geom_point(data = euclid_sim_final1 %>% 
+               ungroup(.) %>%
+  mutate(type = str_replace_all(type, c(
+    "directional_l" = "directional_small",
+    "directional_r" = "directional_large"))
+    ) %>%
+  mutate(type = factor(type, levels = c("directional_small", "directional_large", "disruptive", "stabilizing", "random"))) %>%
+    group_by(type), aes(x = RMSE_avg_scale, y = RMSE_var_scale, color = type), alpha = 0.25) +
+  geom_point(data = euclid_obs_final1 %>% mutate(type = str_replace_all(type, c(
+    "directional_l" = "directional_small",
+    "directional_r" = "directional_large"
+  ))) %>%
+  mutate(type = factor(type, levels = c("directional_small", "directional_large", "disruptive", "stabilizing", "random"))), aes(x = RMSE_avg_scale, y = RMSE_var_scale, group = type), shape = 8, size = 2) +
+  geom_point(data = mu_RMSE_sim1 %>%
+  mutate(type = str_replace_all(type, c(
+    "directional_l" = "directional_small",
+    "directional_r" = "directional_large"))
+    ) %>%
+  mutate(type = factor(type, levels = c("directional_small", "directional_large", "disruptive", "stabilizing", "random"))), aes(x = mu_RMSE_avg, y = mu_RMSE_var, group = type), shape = 3, size = 2) +
+  facet_wrap(~type, nrow = 5) +
+    scale_color_manual(values = c("directional_small" = "#A3A500", "directional_large" = "#F8766D", "disruptive" = "#00BF7D", "stabilizing" = "#E76BF3", "random" = "#00B0F6")) +
+  ylim(-2,36) +
+  xlim(-2, 36) +
+  labs(color = "Model") +
+  ggtitle("PC1") +
+  theme_bw() +
+  theme(panel.grid.minor = element_blank(),
+        panel.background = element_blank(),
+        legend.position = "none"
+        )
+
+#PC2
+p_euclid2 <- ggplot() +
+  geom_point(data = euclid_sim_final2 %>% 
+               ungroup(.) %>%
+  mutate(type = str_replace_all(type, c(
+    "directional_l" = "directional_small",
+    "directional_r" = "directional_large"))
+    ) %>%
+  mutate(type = factor(type, levels = c("directional_small", "directional_large", "disruptive", "stabilizing", "random"))) %>%
+    group_by(type), aes(x = RMSE_avg_scale, y = RMSE_var_scale, color = type), alpha = 0.25) +
+  geom_point(data = euclid_obs_final2 %>% mutate(type = str_replace_all(type, c(
+    "directional_l" = "directional_small",
+    "directional_r" = "directional_large"
+  ))) %>%
+  mutate(type = factor(type, levels = c("directional_small", "directional_large", "disruptive", "stabilizing", "random"))), aes(x = RMSE_avg_scale, y = RMSE_var_scale, group = type), shape = 8, size = 2) +
+  geom_point(data = mu_RMSE_sim2 %>%
+  mutate(type = str_replace_all(type, c(
+    "directional_l" = "directional_small",
+    "directional_r" = "directional_large"))
+    ) %>%
+  mutate(type = factor(type, levels = c("directional_small", "directional_large", "disruptive", "stabilizing", "random"))), aes(x = mu_RMSE_avg, y = mu_RMSE_var, group = type), shape = 3, size = 2) +
+  facet_wrap(~type, nrow = 5) +
+    scale_color_manual(values = c("directional_small" = "#A3A500", "directional_large" = "#F8766D", "disruptive" = "#00BF7D", "stabilizing" = "#E76BF3", "random" = "#00B0F6")) +
+  ylim(-2,36) +
+  xlim(-2, 36) +
+  labs(color = "Model") +
+  ggtitle("PC2") +
+  theme_bw() +
+  theme(panel.grid.minor = element_blank(),
+        panel.background = element_blank(),
+        legend.position = "none"
+        )
+
+#take the legend off the first one and use patchwork to plot together!
+p_euclid1 + p_euclid2
+
+ggsave((p_euclid1 + p_euclid2), filename = file.path(here(), "figures", "NRE_mPCA_extinction_euclid.png"), width = 8, height = 5)
+```
+
+#### Euclidean histogram plots
+
+You can also visualize the distances as a histogram to compare the observed to each model distribution.
+
+```{r check normality, echo=FALSE, warning=FALSE}
+#PC1
+p_euclid_hist1 <- ggplot() +
+  geom_histogram(data = euclid_sim_final1 %>% 
+               ungroup(.) %>%
+  mutate(type = str_replace_all(type, c(
+    "directional_l" = "directional_small",
+    "directional_r" = "directional_large"))
+    ) %>%
+  mutate(type = factor(type, levels = c("directional_small", "directional_large", "disruptive", "stabilizing", "random"))) %>%
+    group_by(type), aes(x = euclid_sim, fill = type), bins = 500, show.legend = FALSE) +
+  #geom_density(data = euclid_sim_final1, aes(x = euclid_sim, fill = type)) +
+  geom_vline(data = euclid_obs_final1 %>% mutate(type = str_replace_all(type, c(
+    "directional_l" = "directional_small",
+    "directional_r" = "directional_large"
+  ))) %>%
+  mutate(type = factor(type, levels = c("directional_small", "directional_large", "disruptive", "stabilizing", "random"))), aes(xintercept = euclid_obs, group = type), color = "black") +
+  facet_wrap(~type, nrow = 5) +
+  scale_fill_manual(values = c("directional_small" = "#A3A500", "directional_large" = "#F8766D", "disruptive" = "#00BF7D", "stabilizing" = "#E76BF3", "random" = "#00B0F6")) +
+  xlim(-2, 40) +
+  labs(color = "Model") +
+  ggtitle("PC1") +
+  theme_bw() +
+  theme(panel.grid.minor = element_blank(),
+        panel.background = element_blank(),
+        legend.position = "none"
+        )
+
+#PC2
+p_euclid_hist2 <- ggplot() +
+  geom_histogram(data = euclid_sim_final2 %>% 
+               ungroup(.) %>%
+  mutate(type = str_replace_all(type, c(
+    "directional_l" = "directional_small",
+    "directional_r" = "directional_large"))
+    ) %>%
+  mutate(type = factor(type, levels = c("directional_small", "directional_large", "disruptive", "stabilizing", "random"))) %>%
+    group_by(type), aes(x = euclid_sim, fill = type), bins = 500, show.legend = FALSE) +
+  #geom_density(data = euclid_sim_final2, aes(x = euclid_sim, fill = type)) +
+  geom_vline(data = euclid_obs_final2 %>% mutate(type = str_replace_all(type, c(
+    "directional_l" = "directional_small",
+    "directional_r" = "directional_large"
+  ))) %>%
+  mutate(type = factor(type, levels = c("directional_small", "directional_large", "disruptive", "stabilizing", "random"))), aes(xintercept = euclid_obs, group = type), color = "black") +
+  facet_wrap(~type, nrow = 5) +
+  scale_fill_manual(values = c("directional_small" = "#A3A500", "directional_large" = "#F8766D", "disruptive" = "#00BF7D", "stabilizing" = "#E76BF3", "random" = "#00B0F6")) +
+  xlim(-2, 40) +
+  labs(color = "Model") +
+  ggtitle("PC2") +
+  theme_bw() +
+  theme(panel.grid.minor = element_blank(),
+        panel.background = element_blank(),
+        legend.position = "none"
+        )
+
+
+#use patchwork to plot together!
+p_euclid_hist1 + p_euclid_hist2
+
+ggsave((p_euclid_hist1 + ggtitle("")), filename = file.path(here(), "figures", "NRE_mPCA_extinction_histogram_PC1.png"), width = 6.5, height = 4.64)
+ggsave((p_euclid_hist2 + ggtitle("")), filename = file.path(here(), "figures", "NRE_mPCA_extinction_histogram_PC2.png"), width = 6.5, height = 4.64)
+
+ggsave((p_euclid_hist1 + p_euclid_hist2), filename = file.path(here(), "figures", "NRE_mPCA_extinction_histogram_v2.png"), width = 6.5, height = (4.64*1.25))
+```
